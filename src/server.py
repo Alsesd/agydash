@@ -6,7 +6,7 @@ Provides:
 - Active task monitoring & live transcript timeline
 - Notifications & interactive question answering
 - Web SSH terminal with session persistence via tmux and ttyd
-- Tailscale discovery and single-port reverse proxy
+- Tailscale discovery, MagicDNS support and reverse proxy compatibility
 """
 
 import json
@@ -23,7 +23,8 @@ import threading
 import time
 import urllib.request
 import urllib.error
-from http.server import HTTPServer, BaseHTTPRequestHandler
+from datetime import datetime, timezone
+from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 from pathlib import Path
 
 # Paths
@@ -40,6 +41,7 @@ STATIC_DIR = Path(__file__).resolve().parent / "static"
 TTYD_PORT = 17682
 TMUX_SESSION_NAME = "agy"
 
+
 class TailscaleHelper:
     @staticmethod
     def get_info():
@@ -47,14 +49,17 @@ class TailscaleHelper:
             "available": False,
             "ip": None,
             "hostname": None,
+            "dns_name": None,
+            "magic_dns": None,
             "status": "offline",
-            "peers": []
+            "peers": [],
+            "urls": []
         }
         try:
             cmd = shutil.which("tailscale") or "/run/current-system/sw/bin/tailscale"
             if not os.path.exists(cmd):
                 return info
-            
+
             # Get IP
             res = subprocess.run([cmd, "ip", "-4"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=2)
             if res.returncode == 0 and res.stdout.strip():
@@ -69,20 +74,36 @@ class TailscaleHelper:
                 self_node = data.get("Self", {})
                 info["hostname"] = self_node.get("HostName", socket.gethostname())
                 info["tailscale_ips"] = self_node.get("TailscaleIPs", [])
-                
+                dns_name = self_node.get("DNSName", "").rstrip(".")
+                info["dns_name"] = dns_name
+                if dns_name:
+                    info["magic_dns"] = dns_name
+
+                # Construct accessible URLs
+                urls = []
+                if dns_name:
+                    urls.append(f"https://{dns_name}")
+                urls.append("https://agydash")
+                urls.append(f"https://{info['hostname']}")
+                if info["ip"]:
+                    urls.append(f"https://{info['ip']}")
+                    urls.append(f"http://{info['ip']}:9090")
+                info["urls"] = urls
+
                 # List peers on tailnet
                 peers = []
                 for p in data.get("Peer", {}).values():
                     peers.append({
                         "hostname": p.get("HostName", ""),
+                        "dns_name": p.get("DNSName", "").rstrip("."),
                         "ip": p.get("TailscaleIPs", [""])[0] if p.get("TailscaleIPs") else "",
                         "os": p.get("OS", ""),
                         "online": p.get("Online", False)
                     })
                 info["peers"] = peers
-        except Exception as e:
+        except Exception:
             pass
-        
+
         if not info["hostname"]:
             info["hostname"] = socket.gethostname()
         return info
@@ -131,7 +152,6 @@ class AntigravityMonitor:
                     c_addr = cached.get("ls_address")
                     c_token = cached.get("csrf_token")
                     if c_addr and c_token:
-                        # Quick check if it responds
                         if self._test_connection(c_addr, c_token):
                             self.ls_address = c_addr
                             self.csrf_token = c_token
@@ -181,7 +201,6 @@ class AntigravityMonitor:
                 try:
                     with open(cli_log, "r", errors="ignore") as f:
                         lines = f.readlines()
-                        # scan backwards for "Language server listening on random port at (\d+) for HTTP"
                         for line in reversed(lines):
                             m = re.search(r"Language server listening on random port at (\d+) for HTTP", line)
                             if m:
@@ -190,7 +209,7 @@ class AntigravityMonitor:
                 except Exception:
                     pass
 
-        # 5. Check if we also find token in recent step outputs
+        # 5. Check recent step outputs
         if not self.csrf_token:
             for step_out in self.app_data_dir.glob("brain/*/.system_generated/steps/*/output.txt"):
                 try:
@@ -204,7 +223,6 @@ class AntigravityMonitor:
                     pass
 
         if self.ls_address and self.csrf_token:
-            # Cache it
             try:
                 CACHE_DIR.mkdir(parents=True, exist_ok=True)
                 with open(SESSION_CACHE_FILE, "w") as f:
@@ -227,10 +245,31 @@ class AntigravityMonitor:
         except Exception:
             return False
 
+    def _format_reset_time(self, iso_str):
+        if not iso_str:
+            return "Unknown"
+        try:
+            target = datetime.fromisoformat(iso_str.replace("Z", "+00:00"))
+            now = datetime.now(timezone.utc)
+            diff = (target - now).total_seconds()
+            if diff <= 0:
+                return "Ready to reset"
+            hours = int(diff // 3600)
+            minutes = int((diff % 3600) // 60)
+            if hours >= 24:
+                days = hours // 24
+                rem_h = hours % 24
+                return f"in {days}d {rem_h}h"
+            elif hours > 0:
+                return f"in {hours}h {minutes}m"
+            else:
+                return f"in {minutes}m"
+        except Exception:
+            return iso_str
+
     def get_limits_and_usage(self):
         now = time.time()
-        # Refresh quota at most every 5 seconds
-        if self.last_quota_data and (now - self.last_quota_time < 5):
+        if self.last_quota_data and (now - self.last_quota_time < 4):
             return self.last_quota_data
 
         # Try live query
@@ -243,14 +282,22 @@ class AntigravityMonitor:
                     "Connect-Protocol-Version": "1",
                     "x-codeium-csrf-token": self.csrf_token
                 })
-                with urllib.request.urlopen(req, timeout=3) as resp:
+                with urllib.request.urlopen(req, timeout=2.5) as resp:
                     if resp.status == 200:
                         raw = json.loads(resp.read().decode("utf-8"))
                         quota_resp = raw.get("response", {})
+                        groups = quota_resp.get("groups", [])
+                        
+                        # Decorate buckets with formatted reset text
+                        for grp in groups:
+                            for b in grp.get("buckets", []):
+                                b["formattedReset"] = self._format_reset_time(b.get("resetTime"))
+                                b["pct"] = int(round(b.get("remainingFraction", 1.0) * 100))
+
                         data = {
                             "status": "live",
                             "timestamp": now,
-                            "groups": quota_resp.get("groups", []),
+                            "groups": groups,
                             "description": quota_resp.get("description", ""),
                             "ls_address": self.ls_address
                         }
@@ -258,7 +305,7 @@ class AntigravityMonitor:
                         self.last_quota_time = now
                         self._save_cached_quota(data)
                         return data
-            except Exception as e:
+            except Exception:
                 pass
 
         # Return cached quota if available
@@ -267,7 +314,7 @@ class AntigravityMonitor:
             cached["status"] = "cached"
             return cached
 
-        # Fallback template if fresh installation without live server yet
+        # Fallback template
         return {
             "status": "offline",
             "timestamp": now,
@@ -276,16 +323,16 @@ class AntigravityMonitor:
                     "displayName": "Gemini Models",
                     "description": "Models within this group: Gemini Flash, Gemini Pro",
                     "buckets": [
-                        {"bucketId": "gemini-weekly", "displayName": "Weekly Limit Remaining", "window": "weekly", "remainingFraction": 1.0, "resetTime": ""},
-                        {"bucketId": "gemini-5h", "displayName": "Five Hour Limit Remaining", "window": "5h", "remainingFraction": 1.0, "resetTime": ""}
+                        {"bucketId": "gemini-weekly", "displayName": "Weekly Limit", "window": "weekly", "remainingFraction": 1.0, "pct": 100, "formattedReset": "6d"},
+                        {"bucketId": "gemini-5h", "displayName": "5-Hour Limit", "window": "5h", "remainingFraction": 1.0, "pct": 100, "formattedReset": "5h"}
                     ]
                 },
                 {
                     "displayName": "Claude and GPT models",
                     "description": "Models within this group: Claude Opus, Claude Sonnet, GPT-OSS",
                     "buckets": [
-                        {"bucketId": "3p-weekly", "displayName": "Weekly Limit Remaining", "window": "weekly", "remainingFraction": 1.0, "resetTime": ""},
-                        {"bucketId": "3p-5h", "displayName": "Five Hour Limit Remaining", "window": "5h", "remainingFraction": 1.0, "resetTime": ""}
+                        {"bucketId": "3p-weekly", "displayName": "Weekly Limit", "window": "weekly", "remainingFraction": 1.0, "pct": 100, "formattedReset": "6d"},
+                        {"bucketId": "3p-5h", "displayName": "5-Hour Limit", "window": "5h", "remainingFraction": 1.0, "pct": 100, "formattedReset": "5h"}
                     ]
                 }
             ],
@@ -316,16 +363,14 @@ class AntigravityMonitor:
                         "killed": bool(row[7])
                     })
                 conn.close()
-            except Exception as e:
+            except Exception:
                 pass
         return convs
 
     def get_active_conversation_id(self):
-        # 1. Environment variable if present
         if os.environ.get("ANTIGRAVITY_CONVERSATION_ID"):
             return os.environ.get("ANTIGRAVITY_CONVERSATION_ID")
 
-        # 2. Check conversation_summaries.db for actively running conversation (not_fully_idle = 1)
         if SUMMARIES_DB.exists():
             try:
                 conn = sqlite3.connect(f"file:{SUMMARIES_DB}?mode=ro", uri=True)
@@ -341,7 +386,6 @@ class AntigravityMonitor:
                     conn.close()
                     return row[0]
 
-                # If no running conversation, select the one with most recent activity and steps
                 cursor.execute("""
                     SELECT conversation_id FROM conversation_summaries
                     WHERE step_count > 0
@@ -355,7 +399,7 @@ class AntigravityMonitor:
             except Exception:
                 pass
 
-        # 3. Check presence locks
+        # Check presence locks
         presence_dir = self.app_data_dir / "presence"
         if presence_dir.exists():
             locks = list(presence_dir.glob("*.lock"))
@@ -363,17 +407,12 @@ class AntigravityMonitor:
                 locks.sort(key=lambda p: p.stat().st_mtime, reverse=True)
                 return locks[0].stem
 
-        # 4. Check cache/last_conversations.json
+        # Check cache
         last_conv_file = CACHE_DIR / "last_conversations.json"
         if last_conv_file.exists():
             try:
                 with open(last_conv_file, "r") as f:
                     data = json.load(f)
-                    cwd = os.getcwd()
-                    if cwd in data:
-                        return data[cwd]
-                    if "/home/alsesd/agy" in data:
-                        return data["/home/alsesd/agy"]
                     vals = list(data.values())
                     if vals:
                         return vals[-1]
@@ -381,6 +420,20 @@ class AntigravityMonitor:
                 pass
 
         return None
+
+    def _clean_user_prompt(self, raw_prompt):
+        if not raw_prompt:
+            return ""
+        # Match <USER_REQUEST>(.*?)</USER_REQUEST>
+        m = re.search(r"<USER_REQUEST>(.*?)</USER_REQUEST>", raw_prompt, re.DOTALL)
+        if m:
+            clean = m.group(1).strip()
+        else:
+            clean = raw_prompt
+        # Strip metadata blocks
+        clean = re.sub(r"<ADDITIONAL_METADATA>.*?</ADDITIONAL_METADATA>", "", clean, flags=re.DOTALL)
+        clean = re.sub(r"<USER_SETTINGS_CHANGE>.*?</USER_SETTINGS_CHANGE>", "", clean, flags=re.DOTALL)
+        return clean.strip()
 
     def get_task_details(self, conv_id=None):
         if not conv_id:
@@ -392,7 +445,8 @@ class AntigravityMonitor:
             "active": True,
             "conversation_id": conv_id,
             "title": "Current Task",
-            "status": "UNKNOWN",
+            "status": "IDLE",
+            "model": "Gemini 3.8 Flash",
             "not_fully_idle": False,
             "user_request": "",
             "steps_count": 0,
@@ -439,32 +493,61 @@ class AntigravityMonitor:
                     
                     res["steps_count"] = len(steps)
                     if steps:
-                        # Extract first user request
+                        # Extract first user request and detect model
                         for st in steps:
                             if st.get("type") == "USER_INPUT" and st.get("content"):
-                                res["user_request"] = st.get("content")
+                                content = st.get("content")
+                                res["user_request"] = self._clean_user_prompt(content)
+                                if "Model Selection" in content:
+                                    m_model = re.search(r"Model Selection` from None to ([^\n]+?)\.\s+[A-Z]", content)
+                                    if m_model:
+                                        res["model"] = m_model.group(1).strip()
                                 break
 
-                        # Scan for pending questions or latest actions
-                        # Recent 25 steps
-                        res["recent_steps"] = steps[-25:]
-                        
-                        # Find latest model step
+                        # Scan for recent steps (compacted for fast mobile transfer)
+                        compact_steps = []
+                        for st in steps[-25:]:
+                            c_step = {
+                                "step_index": st.get("step_index"),
+                                "type": st.get("type"),
+                                "created_at": st.get("created_at"),
+                                "tool": None,
+                                "action": "",
+                                "summary": ""
+                            }
+                            tool_calls = st.get("tool_calls", [])
+                            if tool_calls:
+                                tc = tool_calls[0]
+                                c_step["tool"] = tc.get("name")
+                                c_step["action"] = tc.get("args", {}).get("toolAction", "")
+                                c_step["summary"] = tc.get("args", {}).get("toolSummary", "")
+                            elif st.get("type") == "USER_INPUT":
+                                c_step["action"] = "User Input"
+                                c_step["summary"] = (st.get("content", "")[:100] + "...") if len(st.get("content", "")) > 100 else st.get("content", "")
+                            compact_steps.append(c_step)
+                        res["recent_steps"] = compact_steps
+
+                        # Find latest model step for active action
                         for st in reversed(steps):
                             tool_calls = st.get("tool_calls", [])
                             if tool_calls:
                                 tc = tool_calls[0]
+                                args = tc.get("args", {})
+                                # Keep args concise
+                                preview_args = {}
+                                for k, v in args.items():
+                                    if k in ("CommandLine", "TargetFile", "Url", "query", "Prompt"):
+                                        preview_args[k] = str(v)[:160]
                                 res["current_action"] = {
                                     "step_index": st.get("step_index"),
                                     "tool": tc.get("name"),
-                                    "action": tc.get("args", {}).get("toolAction", ""),
-                                    "summary": tc.get("args", {}).get("toolSummary", ""),
-                                    "args": tc.get("args", {})
+                                    "action": args.get("toolAction", tc.get("name")),
+                                    "summary": args.get("toolSummary", ""),
+                                    "args": preview_args
                                 }
                                 break
 
                         # Check for pending ask_question
-                        # A question is pending if an ask_question step occurred after the last USER_INPUT step
                         last_user_idx = -1
                         last_question = None
                         for st in steps:
@@ -482,15 +565,6 @@ class AntigravityMonitor:
                         if last_question and last_question["step_index"] > last_user_idx:
                             res["pending_question"] = last_question
 
-                        # Notifications (e.g. background tasks or reminders)
-                        for st in steps[-20:]:
-                            content = st.get("content", "")
-                            if "Notification:" in content or "Completed" in content or "Task" in content:
-                                res["notifications"].append({
-                                    "step_index": st.get("step_index"),
-                                    "type": st.get("type"),
-                                    "snippet": content[:200]
-                                })
             except Exception as e:
                 res["error"] = str(e)
 
@@ -507,15 +581,14 @@ class TerminalManager:
         self._thread = None
 
     def start(self):
-        self._thread = threading.Thread(target=self._run_loop, daemon=True)
-        self._thread.start()
+        if not self._thread or not self._thread.is_alive():
+            self._thread = threading.Thread(target=self._run_loop, daemon=True)
+            self._thread.start()
 
     def _run_loop(self):
-        # Find binaries
         ttyd_bin = shutil.which("ttyd") or "/run/current-system/sw/bin/ttyd"
         tmux_bin = shutil.which("tmux") or "/run/current-system/sw/bin/tmux"
 
-        # Check in nix profiles / nix store
         if not os.path.exists(ttyd_bin):
             for p in Path("/nix/store").glob("*-ttyd-*/bin/ttyd"):
                 ttyd_bin = str(p)
@@ -525,7 +598,6 @@ class TerminalManager:
                 tmux_bin = str(p)
                 break
 
-        # Pre-create tmux session so it is persistent and ready immediately
         try:
             subprocess.run([tmux_bin, "new-session", "-d", "-s", self.session], check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         except Exception:
@@ -558,20 +630,23 @@ class TerminalManager:
 class DashboardHandler(BaseHTTPRequestHandler):
     monitor = None
     terminal_port = TTYD_PORT
+    timeout = 30
 
     def log_message(self, format, *args):
-        # Suppress routine GET logging to keep logs clean
+        # Keep journalctl clean
         pass
 
     def do_HEAD(self):
         url_path = self.path.split("?")[0]
-        if url_path == "/" or url_path == "/index.html":
+        if url_path in ("/", "/index.html"):
             self.send_response(200)
-            self.send_header("Content-Type", "text/html")
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Cache-Control", "no-cache")
             self.end_headers()
         elif url_path.startswith("/api/"):
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
+            self.send_header("Cache-Control", "no-cache")
             self.end_headers()
         else:
             self.send_response(200)
@@ -580,8 +655,8 @@ class DashboardHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         url_path = self.path.split("?")[0]
 
-        if url_path == "/" or url_path == "/index.html":
-            self._serve_static_file("index.html", "text/html")
+        if url_path in ("/", "/index.html"):
+            self._serve_static_file("index.html", "text/html; charset=utf-8")
         elif url_path.startswith("/static/"):
             rel = url_path[len("/static/"):]
             self._serve_static_file(rel)
@@ -610,12 +685,11 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 conv_id = data.get("conversationId") or self.monitor.get_active_conversation_id()
                 answer = data.get("answer", "")
                 
-                # Try sending message via agentapi
                 agentapi = Path.home() / ".gemini" / "antigravity-cli" / "bin" / "agentapi"
                 if not agentapi.exists():
                     agentapi = shutil.which("agentapi")
 
-                resp_out = "Answer received and logged."
+                resp_out = "Answer received."
                 if agentapi and os.path.exists(str(agentapi)):
                     try:
                         res = subprocess.run(
@@ -635,9 +709,10 @@ class DashboardHandler(BaseHTTPRequestHandler):
     def _send_json(self, data, status=200):
         payload = json.dumps(data).encode("utf-8")
         self.send_response(status)
-        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Content-Length", str(len(payload)))
         self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Cache-Control", "no-cache, no-store, must-revalidate")
         self.end_headers()
         self.wfile.write(payload)
 
@@ -650,10 +725,10 @@ class DashboardHandler(BaseHTTPRequestHandler):
         if not content_type:
             ext = file_path.suffix.lower()
             types = {
-                ".html": "text/html",
-                ".css": "text/css",
-                ".js": "application/javascript",
-                ".json": "application/json",
+                ".html": "text/html; charset=utf-8",
+                ".css": "text/css; charset=utf-8",
+                ".js": "application/javascript; charset=utf-8",
+                ".json": "application/json; charset=utf-8",
                 ".png": "image/png",
                 ".svg": "image/svg+xml",
                 ".ico": "image/x-icon"
@@ -666,20 +741,24 @@ class DashboardHandler(BaseHTTPRequestHandler):
             self.send_response(200)
             self.send_header("Content-Type", content_type)
             self.send_header("Content-Length", str(len(content)))
+            self.send_header("Cache-Control", "public, max-age=60")
+            self.send_header("Access-Control-Allow-Origin", "*")
             self.end_headers()
             self.wfile.write(content)
         except Exception as e:
             self.send_error(500, str(e))
 
     def _handle_sse_stream(self):
-        """Server-Sent Events for real-time frontend updates."""
+        """Server-Sent Events stream running inside its own thread."""
         self.send_response(200)
-        self.send_header("Content-Type", "text/event-stream")
-        self.send_header("Cache-Control", "no-cache")
+        self.send_header("Content-Type", "text/event-stream; charset=utf-8")
+        self.send_header("Cache-Control", "no-cache, no-transform")
         self.send_header("Connection", "keep-alive")
         self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("X-Accel-Buffering", "no")
         self.end_headers()
 
+        last_hb = time.time()
         try:
             while True:
                 task = self.monitor.get_task_details()
@@ -687,8 +766,15 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 payload = json.dumps({"task": task, "limits": limits})
                 self.wfile.write(f"data: {payload}\n\n".encode("utf-8"))
                 self.wfile.flush()
+
+                now = time.time()
+                if now - last_hb > 10:
+                    self.wfile.write(b": heartbeat\n\n")
+                    self.wfile.flush()
+                    last_hb = now
+
                 time.sleep(1.5)
-        except (BrokenPipeError, ConnectionResetError):
+        except (BrokenPipeError, ConnectionResetError, OSError):
             pass
 
     def _proxy_to_ttyd(self):
@@ -700,10 +786,9 @@ class DashboardHandler(BaseHTTPRequestHandler):
         try:
             target_sock = socket.create_connection((backend_host, backend_port), timeout=3)
         except Exception as e:
-            self.send_error(502, f"Could not connect to terminal backend: {e}")
+            self.send_error(502, f"Terminal backend unavailable: {e}")
             return
 
-        # Prepare request line and headers
         req_line = f"{self.command} {self.path} HTTP/1.1\r\n"
         headers_str = req_line
         for h, v in self.headers.items():
@@ -715,7 +800,6 @@ class DashboardHandler(BaseHTTPRequestHandler):
         target_sock.sendall(headers_str.encode("utf-8"))
 
         if is_websocket:
-            # Upgrade connection and relay raw TCP bidirectionally
             self.close_connection = True
             client_sock = self.connection
             client_sock.setblocking(False)
@@ -740,7 +824,6 @@ class DashboardHandler(BaseHTTPRequestHandler):
             finally:
                 target_sock.close()
         else:
-            # Standard HTTP response proxying
             target_sock.settimeout(5.0)
             try:
                 resp_data = bytearray()
@@ -750,7 +833,6 @@ class DashboardHandler(BaseHTTPRequestHandler):
                         break
                     resp_data.extend(chunk)
                     if b"\r\n\r\n" in resp_data:
-                        # Extract status and headers
                         head, body = resp_data.split(b"\r\n\r\n", 1)
                         lines = head.split(b"\r\n")
                         status_line = lines[0].decode("latin-1")
@@ -772,7 +854,6 @@ class DashboardHandler(BaseHTTPRequestHandler):
                         self.end_headers()
                         if body:
                             self.wfile.write(body)
-                        # Read remaining if content-length specified
                         if content_len is not None:
                             rem = content_len - len(body)
                             while rem > 0:
@@ -782,7 +863,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
                                 self.wfile.write(chunk)
                                 rem -= len(chunk)
                         break
-            except Exception as e:
+            except Exception:
                 pass
             finally:
                 target_sock.close()
@@ -796,18 +877,20 @@ def run_dashboard(host="0.0.0.0", port=9090):
     DashboardHandler.monitor = monitor
     DashboardHandler.terminal_port = TTYD_PORT
 
-    server = HTTPServer((host, port), DashboardHandler)
+    # Multi-threaded server prevents SSE from blocking requests
+    server = ThreadingHTTPServer((host, port), DashboardHandler)
+    server.daemon_threads = True
+
     ts = TailscaleHelper.get_info()
 
     print("=" * 65)
-    print(" 🚀 Antigravity Web Dashboard is running!")
+    print(" 🚀 Antigravity Web Dashboard (Threading) is running!")
     print(f" • Local Address:     http://localhost:{port}")
     if ts["available"] and ts["ip"]:
-        print(f" • Tailscale Address: http://{ts['ip']}:{port}")
-        if ts["hostname"]:
-            print(f" • Tailscale DNS:     http://{ts['hostname']}:{port}")
-    else:
-        print(" • Tailscale:         Not currently connected (binding to 0.0.0.0)")
+        print(f" • Tailscale IP:      http://{ts['ip']}:{port}")
+        if ts.get("magic_dns"):
+            print(f" • Tailscale DNS:     https://{ts['magic_dns']}")
+            print(f" • HTTPS Short:       https://agydash")
     print(f" • SSH Tmux Session:  tmux attach -t {TMUX_SESSION_NAME}")
     print("=" * 65)
 

@@ -6,376 +6,285 @@
   <meta name="theme-color" content="#1d2021">
   <title>Antigravity Hub</title>
   <link rel="stylesheet" href="/static/style.css">
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
 </head>
 <body class="gruvbox-dark">
-  <div class="app-container">
-    <!-- Top Header -->
-    <header class="app-header">
-      <div class="header-left">
-        <div class="brand-chip">
-          <svg viewBox="0 0 24 24" width="18" height="18" stroke="currentColor" stroke-width="2.2" fill="none">
+  <div class="page-container">
+    <!-- Top Bar -->
+    <header class="top-bar">
+      <div class="bar-left">
+        <div class="brand">
+          <svg viewBox="0 0 24 24" width="22" height="22" stroke="currentColor" stroke-width="2.2" fill="none">
             <path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/>
           </svg>
-          <span class="brand-title">Antigravity</span>
+          <span class="brand-name">Antigravity</span>
         </div>
-
-        <div class="tailscale-chip" id="tailscale-chip" title="Tailscale Network Status">
-          <span class="dot-indicator"></span>
-          <span id="tailscale-label">Tailscale...</span>
+        <div class="status-chip" id="agent-status-chip">
+          <span class="pulse-dot"></span>
+          <span id="agent-status-text">Connecting...</span>
         </div>
       </div>
 
-      <div class="header-right">
-        <div class="agent-chip" id="agent-chip">
-          <span class="dot-indicator"></span>
-          <span id="agent-state-label">Idle</span>
+      <div class="bar-right">
+        <div class="model-badge" id="model-badge" title="Active Model">
+          <span id="active-model-name">Gemini 3.8 Flash</span>
         </div>
 
-        <button class="icon-btn" id="refresh-btn" title="Refresh">
+        <div class="ts-badge" id="ts-badge" title="Tailscale Status">
+          <span class="ts-dot"></span>
+          <span id="ts-badge-text">Tailscale</span>
+        </div>
+
+        <button class="btn-icon" id="btn-refresh" title="Refresh">
           <svg viewBox="0 0 24 24" width="16" height="16" stroke="currentColor" stroke-width="2" fill="none">
             <path d="M23 4v6h-6"></path>
             <path d="M1 20v-6h6"></path>
             <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path>
           </svg>
         </button>
+
+        <button class="btn-terminal" id="btn-open-terminal" title="Open SSH Terminal">
+          <svg viewBox="0 0 24 24" width="15" height="15" stroke="currentColor" stroke-width="2" fill="none">
+            <polyline points="4 17 10 11 4 5"></polyline>
+            <line x1="12" y1="19" x2="20" y2="19"></line>
+          </svg>
+          <span>Terminal</span>
+        </button>
       </div>
     </header>
 
-    <!-- Question Alert Banner -->
-    <div class="alert-bar" id="question-banner" style="display: none;" onclick="switchTab('questions')">
-      <span class="alert-icon">⚠️</span>
-      <div class="alert-text">
-        <span class="alert-title" id="banner-title">Question from Agent</span>
-        <span class="alert-sub" id="banner-text">Tap to answer</span>
-      </div>
-      <span class="alert-action">Open →</span>
-    </div>
+    <!-- Main Single Page Content -->
+    <main class="dashboard-body">
 
-    <!-- Main Navigation Tabs (Desktop Top / Mobile Integrated) -->
-    <nav class="nav-tabs" id="main-nav-tabs">
-      <button class="nav-tab active" data-tab="overview">
-        <svg viewBox="0 0 24 24" width="17" height="17" stroke="currentColor" stroke-width="2" fill="none">
-          <rect x="3" y="3" width="7" height="9" rx="1"></rect>
-          <rect x="14" y="3" width="7" height="5" rx="1"></rect>
-          <rect x="14" y="12" width="7" height="9" rx="1"></rect>
-          <rect x="3" y="16" width="7" height="5" rx="1"></rect>
-        </svg>
-        <span>Limits</span>
-      </button>
-
-      <button class="nav-tab" data-tab="task">
-        <svg viewBox="0 0 24 24" width="17" height="17" stroke="currentColor" stroke-width="2" fill="none">
-          <polyline points="22 12 18 12 15 21 9 3 6 12 2 12"></polyline>
-        </svg>
-        <span>Task</span>
-        <span class="tab-badge" id="task-badge" style="display: none;">0</span>
-      </button>
-
-      <button class="nav-tab" data-tab="questions">
-        <svg viewBox="0 0 24 24" width="17" height="17" stroke="currentColor" stroke-width="2" fill="none">
-          <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path>
-        </svg>
-        <span>Questions</span>
-        <span class="tab-badge warning" id="q-badge" style="display: none;">!</span>
-      </button>
-
-      <button class="nav-tab" data-tab="terminal">
-        <svg viewBox="0 0 24 24" width="17" height="17" stroke="currentColor" stroke-width="2" fill="none">
-          <polyline points="4 17 10 11 4 5"></polyline>
-          <line x1="12" y1="19" x2="20" y2="19"></line>
-        </svg>
-        <span>SSH Terminal</span>
-      </button>
-    </nav>
-
-    <!-- Views Container -->
-    <main class="views-wrapper">
-      <!-- 1. Limits & Usage View -->
-      <section class="view-panel active" id="tab-overview">
-        <!-- Key Metrics Strip -->
-        <div class="metrics-strip">
-          <div class="metric-card">
-            <span class="metric-label">Steps</span>
-            <span class="metric-value font-mono" id="stat-steps">--</span>
+      <!-- Interactive Question Alert (Displayed prominently if agent asks a question) -->
+      <section class="card question-card" id="question-card" style="display: none;">
+        <div class="card-header question-header">
+          <div class="title-with-icon">
+            <span class="q-icon">❓</span>
+            <span class="font-bold">Pending Question from Antigravity</span>
           </div>
-          <div class="metric-card">
-            <span class="metric-label">Model</span>
-            <span class="metric-value font-mono" id="stat-model">Gemini 3.8 Flash</span>
-          </div>
-          <div class="metric-card">
-            <span class="metric-label">Status</span>
-            <span class="metric-value font-mono" id="stat-state">IDLE</span>
-          </div>
-          <div class="metric-card">
-            <span class="metric-label">Tailscale IP</span>
-            <span class="metric-value font-mono text-aqua" id="stat-tailscale-ip">100.x.y.z</span>
-          </div>
+          <span class="badge badge-warning">Awaiting Input</span>
+        </div>
+        <div class="card-content">
+          <p class="question-text" id="q-prompt-text">Question prompt here</p>
+          <form id="question-form" onsubmit="submitAnswer(event)">
+            <div class="options-container" id="q-options-list"></div>
+            <div class="form-group mt-2">
+              <label for="q-custom-input" class="label-xs">Custom answer / notes:</label>
+              <textarea id="q-custom-input" rows="2" placeholder="Write custom reply or additional details..."></textarea>
+            </div>
+            <button type="submit" class="btn btn-primary mt-2" id="btn-submit-answer">
+              <span>Submit Answer to Agent</span>
+            </button>
+          </form>
+        </div>
+      </section>
+
+      <!-- Section: Model Limits & Quota Pools -->
+      <section class="section-block">
+        <div class="section-header">
+          <h2 class="section-title">Model Quotas & Limits</h2>
+          <span class="status-indicator" id="quota-sync-status">Syncing...</span>
         </div>
 
-        <!-- Quota Cards -->
-        <div class="cards-grid">
-          <!-- Gemini Models -->
-          <div class="gruvbox-card">
-            <div class="card-head">
-              <div class="card-title">
+        <div class="quota-grid">
+          <!-- Gemini Card -->
+          <div class="card quota-card">
+            <div class="card-header">
+              <div class="title-with-icon">
                 <span class="dot-gemini"></span>
-                <span>Gemini Models</span>
+                <span class="card-title font-bold">Gemini Models</span>
               </div>
-              <span class="pill-sm" id="quota-status-pill">Connected</span>
+              <span class="badge" id="gemini-pill">Flash / Pro</span>
             </div>
-
-            <div class="meters-stack">
-              <div class="meter-row">
-                <div class="meter-info">
-                  <span>Weekly Limit</span>
-                  <span class="font-mono font-bold" id="gemini-weekly-val">100%</span>
+            <div class="meter-group">
+              <div class="meter-item">
+                <div class="meter-labels">
+                  <span class="meter-name">Weekly Limit</span>
+                  <span class="meter-val font-mono" id="gemini-weekly-val">--%</span>
                 </div>
                 <div class="meter-track">
-                  <div class="meter-fill fill-green" id="gemini-weekly-bar" style="width: 100%;"></div>
+                  <div class="meter-bar fill-green" id="gemini-weekly-bar" style="width: 0%;"></div>
                 </div>
                 <span class="meter-sub" id="gemini-weekly-reset">Resets in: --</span>
               </div>
 
-              <div class="meter-row">
-                <div class="meter-info">
-                  <span>5-Hour Limit</span>
-                  <span class="font-mono font-bold" id="gemini-5h-val">100%</span>
+              <div class="meter-item mt-2">
+                <div class="meter-labels">
+                  <span class="meter-name">5-Hour Limit</span>
+                  <span class="meter-val font-mono" id="gemini-5h-val">--%</span>
                 </div>
                 <div class="meter-track">
-                  <div class="meter-fill fill-green" id="gemini-5h-bar" style="width: 100%;"></div>
+                  <div class="meter-bar fill-green" id="gemini-5h-bar" style="width: 0%;"></div>
                 </div>
                 <span class="meter-sub" id="gemini-5h-reset">Resets in: --</span>
               </div>
             </div>
           </div>
 
-          <!-- Claude & GPT Models -->
-          <div class="gruvbox-card">
-            <div class="card-head">
-              <div class="card-title">
+          <!-- Claude & GPT Card -->
+          <div class="card quota-card">
+            <div class="card-header">
+              <div class="title-with-icon">
                 <span class="dot-3p"></span>
-                <span>Claude & GPT Models</span>
+                <span class="card-title font-bold">Claude & GPT Models</span>
               </div>
-              <span class="pill-sm">3rd Party</span>
+              <span class="badge badge-purple">3rd Party</span>
             </div>
-
-            <div class="meters-stack">
-              <div class="meter-row">
-                <div class="meter-info">
-                  <span>Weekly Limit</span>
-                  <span class="font-mono font-bold" id="3p-weekly-val">100%</span>
+            <div class="meter-group">
+              <div class="meter-item">
+                <div class="meter-labels">
+                  <span class="meter-name">Weekly Limit</span>
+                  <span class="meter-val font-mono" id="3p-weekly-val">--%</span>
                 </div>
                 <div class="meter-track">
-                  <div class="meter-fill fill-purple" id="3p-weekly-bar" style="width: 100%;"></div>
+                  <div class="meter-bar fill-purple" id="3p-weekly-bar" style="width: 0%;"></div>
                 </div>
                 <span class="meter-sub" id="3p-weekly-reset">Resets in: --</span>
               </div>
 
-              <div class="meter-row">
-                <div class="meter-info">
-                  <span>5-Hour Limit</span>
-                  <span class="font-mono font-bold" id="3p-5h-val">100%</span>
+              <div class="meter-item mt-2">
+                <div class="meter-labels">
+                  <span class="meter-name">5-Hour Limit</span>
+                  <span class="meter-val font-mono" id="3p-5h-val">--%</span>
                 </div>
                 <div class="meter-track">
-                  <div class="meter-fill fill-purple" id="3p-5h-bar" style="width: 100%;"></div>
+                  <div class="meter-bar fill-purple" id="3p-5h-bar" style="width: 0%;"></div>
                 </div>
                 <span class="meter-sub" id="3p-5h-reset">Resets in: --</span>
               </div>
             </div>
           </div>
         </div>
-
-        <!-- Quota Rule Explanation -->
-        <div class="gruvbox-card mt-3">
-          <div class="info-block">
-            <span class="info-icon">💡</span>
-            <div class="info-text">
-              <p id="quota-desc-text">Within each model pool, models share a weekly and 5-hour limit. Quota is consumed proportionally to token cost. 5-hour limits smooth aggregate demand; weekly limits are tied to your tier.</p>
-            </div>
-          </div>
-        </div>
       </section>
 
-      <!-- 2. Current Task View -->
-      <section class="view-panel" id="tab-task">
-        <!-- Active Task Header Card -->
-        <div class="gruvbox-card">
-          <div class="card-head">
-            <span class="tag-label" id="task-status-tag">ACTIVE TASK</span>
-            <span class="copy-chip font-mono" id="task-conv-id" onclick="copyConvId()" title="Copy ID">
-              <span id="task-id-text">Loading...</span>
+      <!-- Section: Active Task & Current Action -->
+      <section class="section-block">
+        <div class="section-header">
+          <h2 class="section-title">Active Antigravity Task</h2>
+          <div class="task-meta font-mono" id="task-steps-count">Steps: --</div>
+        </div>
+
+        <!-- Task Overview Card -->
+        <div class="card">
+          <div class="card-header">
+            <div class="session-info">
+              <span class="tag-status" id="task-status-tag">ACTIVE</span>
+              <span class="task-title font-bold" id="task-title">Antigravity Session</span>
+            </div>
+            <div class="chip-copy font-mono" id="copy-conv-btn" onclick="copyConversationId()" title="Copy Conversation ID">
+              <span id="conv-id-short">ID: --------</span>
               <svg viewBox="0 0 24 24" width="12" height="12" stroke="currentColor" stroke-width="2" fill="none">
                 <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
                 <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
               </svg>
-            </span>
-          </div>
-          <div class="prompt-box font-mono" id="task-user-request">Loading prompt...</div>
-        </div>
-
-        <!-- Active Action Card -->
-        <div class="gruvbox-card mt-3" id="active-action-card">
-          <div class="card-head">
-            <div class="card-title">
-              <span class="spinner-dot"></span>
-              <span id="action-title">Executing Step</span>
             </div>
-            <span class="font-mono text-aqua" id="action-tool-name">tool</span>
           </div>
-          <div class="action-body">
-            <p class="action-summary" id="action-desc">Working on step...</p>
-            <pre class="code-box font-mono" id="action-args">{}</pre>
-          </div>
-        </div>
 
-        <!-- Step History Timeline -->
-        <div class="gruvbox-card mt-3">
-          <div class="card-head">
-            <span class="font-bold">Recent Activity</span>
-            <span class="text-muted text-xs" id="timeline-count">Latest steps</span>
+          <div class="task-prompt-box">
+            <span class="label-xs text-muted">User Request:</span>
+            <div class="prompt-text font-mono" id="task-prompt-content">Loading prompt...</div>
           </div>
-          <div class="timeline-container" id="timeline-list">
-            <div class="empty-state">Loading timeline...</div>
+
+          <!-- Live Action Box -->
+          <div class="current-action-box" id="current-action-box">
+            <div class="action-top">
+              <span class="action-pulse"></span>
+              <span class="font-bold text-aqua" id="action-tool-badge">TOOL</span>
+              <span class="action-name" id="action-summary-text">Ready</span>
+            </div>
+            <pre class="action-args font-mono" id="action-args-preview">{}</pre>
           </div>
         </div>
       </section>
 
-      <!-- 3. Questions & Notifications View -->
-      <section class="view-panel" id="tab-questions">
-        <!-- Question Card -->
-        <div class="gruvbox-card" id="question-card">
-          <div class="card-head">
-            <div class="card-title">
-              <span class="badge-icon">❓</span>
-              <span id="q-title">Pending Question</span>
-            </div>
-            <span class="status-pill-warning" id="q-status-badge">Waiting</span>
-          </div>
-
-          <div class="q-content">
-            <p class="q-prompt font-bold" id="q-prompt-text">No pending questions from Antigravity.</p>
-
-            <form id="question-form" onsubmit="submitQuestionAnswer(event)" style="display: none;">
-              <div class="q-options" id="q-options-container">
-                <!-- Dynamically populated options -->
-              </div>
-
-              <div class="q-custom-box mt-3">
-                <label for="q-custom-text" class="text-xs text-muted">Additional notes / write-in:</label>
-                <textarea id="q-custom-text" rows="2" placeholder="Optional clarification or custom input..."></textarea>
-              </div>
-
-              <button type="submit" class="btn-submit mt-3" id="btn-submit-answer">
-                <span>Submit Answer to Agent</span>
-              </button>
-            </form>
-          </div>
+      <!-- Section: Recent Activity Timeline -->
+      <section class="section-block">
+        <div class="section-header">
+          <h2 class="section-title">Recent Activity</h2>
+          <span class="text-xs text-muted" id="timeline-count-badge">Last 20 steps</span>
         </div>
 
-        <!-- Notifications -->
-        <div class="gruvbox-card mt-3">
-          <div class="card-head">
-            <span class="font-bold">Notifications</span>
-          </div>
-          <div class="notif-container" id="notifications-list">
-            <div class="empty-state">No notifications.</div>
+        <div class="card">
+          <div class="timeline" id="timeline-stream">
+            <div class="empty-state">Loading activity timeline...</div>
           </div>
         </div>
       </section>
 
-      <!-- 4. SSH Terminal View -->
-      <section class="view-panel" id="tab-terminal">
-        <div class="terminal-shell">
-          <!-- Terminal Header Bar -->
-          <div class="terminal-toolbar">
-            <div class="term-status-group">
-              <span class="term-status-dot"></span>
-              <span class="font-mono text-xs">tmux session: <strong>agy</strong></span>
-            </div>
+      <!-- Section: Remote Access & Tailscale -->
+      <section class="section-block">
+        <div class="section-header">
+          <h2 class="section-title">Tailscale & Remote Access</h2>
+          <span class="badge badge-aqua" id="ts-connection-badge">Online</span>
+        </div>
 
-            <div class="term-buttons">
-              <button class="term-btn" onclick="copySshCommand()" title="Copy SSH command">
-                <svg viewBox="0 0 24 24" width="13" height="13" stroke="currentColor" stroke-width="2" fill="none">
-                  <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
-                  <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
-                </svg>
-                <span>SSH</span>
-              </button>
-              <button class="term-btn" onclick="reloadTerminal()" title="Reconnect">
-                <span>Reconnect</span>
-              </button>
-              <button class="term-btn" onclick="toggleTerminalFullscreen()" title="Fullscreen">
-                <span>⛶</span>
-              </button>
+        <div class="card">
+          <div class="ts-links-grid">
+            <div class="link-item">
+              <span class="text-xs text-muted">Tailscale DNS:</span>
+              <a href="#" class="font-mono text-aqua" id="link-ts-dns" target="_blank">https://nixos.tail42f05a.ts.net</a>
+            </div>
+            <div class="link-item">
+              <span class="text-xs text-muted">Short Domain:</span>
+              <a href="https://agydash" class="font-mono text-yellow" target="_blank">https://agydash</a>
+            </div>
+            <div class="link-item">
+              <span class="text-xs text-muted">Tailscale IP:</span>
+              <span class="font-mono" id="text-ts-ip">100.109.108.22</span>
+            </div>
+            <div class="link-item">
+              <span class="text-xs text-muted">Direct Port 9090:</span>
+              <a href="#" class="font-mono text-muted" id="link-direct-port" target="_blank">http://100.109.108.22:9090</a>
             </div>
           </div>
 
-          <!-- Quick SSH helper command -->
-          <div class="terminal-ssh-hint">
+          <!-- Quick SSH Command -->
+          <div class="ssh-bar mt-2">
             <span class="text-muted font-mono">$</span>
-            <code class="font-mono" id="ssh-cmd-text">ssh alsesd@100.109.108.22 -t "tmux new -A -s agy"</code>
-          </div>
-
-          <!-- Mobile Virtual Keys Bar -->
-          <div class="virtual-keys-bar" id="virtual-keys">
-            <button class="vkey" onclick="sendKeyToTerm('Escape')">Esc</button>
-            <button class="vkey" onclick="sendKeyToTerm('Tab')">Tab</button>
-            <button class="vkey" onclick="sendKeyToTerm('CtrlC')">Ctrl-C</button>
-            <button class="vkey" onclick="sendKeyToTerm('Enter')">Enter</button>
-            <button class="vkey" onclick="sendKeyToTerm('Up')">↑</button>
-            <button class="vkey" onclick="sendKeyToTerm('Down')">↓</button>
-            <button class="vkey" onclick="sendKeyToTerm('Clear')">Clear</button>
-          </div>
-
-          <!-- Terminal Iframe -->
-          <div class="terminal-viewport" id="terminal-container">
-            <iframe id="terminal-iframe" src="/terminal/" frameborder="0" allowfullscreen></iframe>
+            <code class="font-mono" id="ssh-command-code">ssh alsesd@100.109.108.22 -t "tmux new -A -s agy"</code>
+            <button class="btn-copy-ssh" onclick="copySSHCommand()" title="Copy SSH command">Copy</button>
           </div>
         </div>
       </section>
+
     </main>
 
-    <!-- Mobile Bottom Navigation Bar -->
-    <nav class="mobile-nav-bar">
-      <button class="mobile-nav-btn active" data-tab="overview">
-        <svg viewBox="0 0 24 24" width="20" height="20" stroke="currentColor" stroke-width="2" fill="none">
-          <rect x="3" y="3" width="7" height="9" rx="1"></rect>
-          <rect x="14" y="3" width="7" height="5" rx="1"></rect>
-          <rect x="14" y="12" width="7" height="9" rx="1"></rect>
-          <rect x="3" y="16" width="7" height="5" rx="1"></rect>
-        </svg>
-        <span>Limits</span>
-      </button>
+    <!-- Slide-over / Modal Terminal Drawer -->
+    <div class="terminal-drawer" id="terminal-drawer">
+      <div class="drawer-header">
+        <div class="drawer-title">
+          <span class="term-dot"></span>
+          <span class="font-mono font-bold">Web SSH Terminal (tmux: agy)</span>
+        </div>
+        <div class="drawer-actions">
+          <button class="btn-icon" onclick="reloadTerminal()" title="Reconnect">↻</button>
+          <button class="btn-close" id="btn-close-terminal" title="Close Terminal">✕</button>
+        </div>
+      </div>
 
-      <button class="mobile-nav-btn" data-tab="task">
-        <svg viewBox="0 0 24 24" width="20" height="20" stroke="currentColor" stroke-width="2" fill="none">
-          <polyline points="22 12 18 12 15 21 9 3 6 12 2 12"></polyline>
-        </svg>
-        <span>Task</span>
-      </button>
+      <!-- Virtual keys for phone touch typing -->
+      <div class="mobile-keys-bar">
+        <button class="vkey" onclick="sendKey('Escape')">Esc</button>
+        <button class="vkey" onclick="sendKey('Tab')">Tab</button>
+        <button class="vkey" onclick="sendKey('CtrlC')">Ctrl-C</button>
+        <button class="vkey" onclick="sendKey('Enter')">Enter</button>
+        <button class="vkey" onclick="sendKey('Up')">↑</button>
+        <button class="vkey" onclick="sendKey('Down')">↓</button>
+        <button class="vkey" onclick="sendKey('Clear')">Clear</button>
+      </div>
 
-      <button class="mobile-nav-btn" data-tab="questions">
-        <svg viewBox="0 0 24 24" width="20" height="20" stroke="currentColor" stroke-width="2" fill="none">
-          <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path>
-        </svg>
-        <span>Questions</span>
-        <span class="mobile-badge" id="mobile-q-badge" style="display: none;">!</span>
-      </button>
+      <div class="drawer-viewport">
+        <!-- Iframe injected lazily on drawer open -->
+        <div class="iframe-placeholder" id="terminal-placeholder">
+          <span>Tap to launch persistent terminal session...</span>
+        </div>
+      </div>
+    </div>
+    <div class="drawer-backdrop" id="terminal-backdrop"></div>
 
-      <button class="mobile-nav-btn" data-tab="terminal">
-        <svg viewBox="0 0 24 24" width="20" height="20" stroke="currentColor" stroke-width="2" fill="none">
-          <polyline points="4 17 10 11 4 5"></polyline>
-          <line x1="12" y1="19" x2="20" y2="19"></line>
-        </svg>
-        <span>Terminal</span>
-      </button>
-    </nav>
+    <!-- Toast Notification -->
+    <div class="toast" id="toast"></div>
   </div>
-
-  <div class="toast-popup" id="toast"></div>
 
   <script src="/static/app.js"></script>
 </body>

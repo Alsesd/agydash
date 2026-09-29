@@ -126,22 +126,62 @@ UNIT
   esac
 }
 
+cmd_proxy() {
+  local action="${1:-status}"
+  case "$action" in
+    start)
+      docker run -d \
+        --name agy-https-proxy \
+        --restart always \
+        --network host \
+        -v "$PROJECT_ROOT/caddy/Caddyfile:/etc/caddy/Caddyfile" \
+        -v "$PROJECT_ROOT/caddy/data:/data" \
+        -v "$PROJECT_ROOT/caddy/config:/config" \
+        caddy:alpine 2>/dev/null || docker start agy-https-proxy
+      echo "✓ Started HTTPS reverse proxy (ports 443, 80)"
+      ;;
+    stop)
+      docker stop agy-https-proxy
+      echo "✓ Stopped HTTPS reverse proxy"
+      ;;
+    restart)
+      docker restart agy-https-proxy
+      echo "✓ Restarted HTTPS reverse proxy"
+      ;;
+    status)
+      docker ps -f name=agy-https-proxy
+      ;;
+    logs)
+      docker logs -f agy-https-proxy
+      ;;
+    *)
+      echo "Usage: antigravity-dashboard proxy [start|stop|restart|status|logs]"
+      ;;
+  esac
+}
+
 cmd_tailscale() {
   local ts_ip
   ts_ip="$(tailscale ip -4 2>/dev/null || echo "")"
+  local dns_name
+  dns_name="$(tailscale status --json 2>/dev/null | jq -r .Self.DNSName 2>/dev/null | sed 's/\.$//' || echo "")"
   local hostname
   hostname="$(hostname)"
 
   echo "==========================================================="
   echo " 🚀 Antigravity Web Dashboard Access Information"
   echo "==========================================================="
-  echo " • Localhost:      http://localhost:$PORT"
+  echo " • Localhost HTTP:   http://localhost:$PORT"
+  echo " • Localhost HTTPS:  https://localhost"
   if [[ -n "$ts_ip" ]]; then
-    echo " • Tailscale IP:   http://$ts_ip:$PORT"
-    echo " • Tailscale Host: http://$hostname:$PORT"
-    echo " • Tailscale SSH:  ssh $USER@$ts_ip -t 'tmux new -A -s agy'"
+    echo " • Tailscale DNS:    https://$dns_name"
+    echo " • Short Domain:     https://agydash"
+    echo " • Tailscale IP:     https://$ts_ip"
+    echo " • Direct Port 9090: http://$ts_ip:$PORT"
+    echo " • Root CA Cert:     http://$ts_ip/root.crt"
+    echo " • Tailscale SSH:    ssh $USER@$ts_ip -t 'tmux new -A -s agy'"
   else
-    echo " • Tailscale:      Not active (bound to 0.0.0.0:$PORT)"
+    echo " • Tailscale:        Not active (bound to 0.0.0.0:$PORT)"
   fi
   echo "==========================================================="
 }
@@ -155,6 +195,9 @@ case "$ACTION" in
     ;;
   service)
     cmd_service "${1:-status}"
+    ;;
+  proxy)
+    cmd_proxy "${1:-status}"
     ;;
   tailscale)
     cmd_tailscale

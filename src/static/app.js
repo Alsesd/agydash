@@ -1,141 +1,98 @@
-// Antigravity Web Dashboard Client Application (Gruvbox Edition)
+// Antigravity Hub - Single Page Application
 
 let currentConvId = null;
 let currentTailscaleIp = null;
 let currentQuestionStep = null;
 let sseSource = null;
+let isTerminalLoaded = false;
+let fallbackPollInterval = null;
 
-// Initialize
 document.addEventListener("DOMContentLoaded", () => {
-  setupTabs();
-  initSSE();
-  fetchInitialData();
+  setupTerminalDrawer();
+  initDataFeed();
 
-  // Manual refresh button
-  const refreshBtn = document.getElementById("refresh-btn");
+  const refreshBtn = document.getElementById("btn-refresh");
   if (refreshBtn) {
     refreshBtn.addEventListener("click", () => {
-      fetchInitialData();
+      fetchData();
       showToast("Refreshed");
     });
   }
 });
 
-// Tab Navigation (both desktop and mobile)
-function setupTabs() {
-  const desktopTabs = document.querySelectorAll(".nav-tab");
-  const mobileTabs = document.querySelectorAll(".mobile-nav-btn");
+// SSE Stream with Polling Fallback
+function initDataFeed() {
+  fetchData(); // initial fetch immediately
 
-  function handleTabClick(btn) {
-    const target = btn.getAttribute("data-tab");
-    switchTab(target);
-  }
-
-  desktopTabs.forEach(tab => tab.addEventListener("click", () => handleTabClick(tab)));
-  mobileTabs.forEach(tab => tab.addEventListener("click", () => handleTabClick(tab)));
-}
-
-function switchTab(tabId) {
-  // Update desktop tabs
-  document.querySelectorAll(".nav-tab").forEach(btn => {
-    btn.classList.toggle("active", btn.getAttribute("data-tab") === tabId);
-  });
-
-  // Update mobile bottom nav buttons
-  document.querySelectorAll(".mobile-nav-btn").forEach(btn => {
-    btn.classList.toggle("active", btn.getAttribute("data-tab") === tabId);
-  });
-
-  // Update panels
-  document.querySelectorAll(".view-panel").forEach(panel => {
-    panel.classList.toggle("active", panel.id === `tab-${tabId}`);
-  });
-}
-
-// Server-Sent Events (SSE) Stream
-function initSSE() {
-  if (sseSource) {
-    sseSource.close();
-  }
-
-  sseSource = new EventSource("/api/stream");
-
-  sseSource.onmessage = (event) => {
+  if (window.EventSource) {
     try {
-      const data = JSON.parse(event.data);
-      if (data) {
-        if (data.limits) updateLimitsUI(data.limits);
-        if (data.task) updateTaskUI(data.task);
-      }
-    } catch (e) {
-      console.error("SSE parse error:", e);
-    }
-  };
+      if (sseSource) sseSource.close();
+      sseSource = new EventSource("/api/stream");
 
-  sseSource.onerror = () => {
-    // Retry polling if stream drops
-    setTimeout(fetchInitialData, 4000);
-  };
+      sseSource.onmessage = (event) => {
+        try {
+          const data = JSON.parse(event.data);
+          if (data) {
+            if (data.limits) renderLimits(data.limits);
+            if (data.task) renderTask(data.task);
+          }
+        } catch (e) {
+          console.error("SSE parse error", e);
+        }
+      };
+
+      sseSource.onerror = () => {
+        // SSE disconnected, fallback to polling
+        startFallbackPolling();
+      };
+    } catch (e) {
+      startFallbackPolling();
+    }
+  } else {
+    startFallbackPolling();
+  }
 }
 
-// REST Data Fetch
-async function fetchInitialData() {
+function startFallbackPolling() {
+  if (fallbackPollInterval) return;
+  fallbackPollInterval = setInterval(fetchData, 3000);
+}
+
+async function fetchData() {
   try {
     const [limitsRes, statusRes, tsRes] = await Promise.all([
-      fetch("/api/limits").then(r => r.json()),
-      fetch("/api/status").then(r => r.json()),
-      fetch("/api/tailscale").then(r => r.json())
+      fetch("/api/limits").then(r => r.json()).catch(() => null),
+      fetch("/api/status").then(r => r.json()).catch(() => null),
+      fetch("/api/tailscale").then(r => r.json()).catch(() => null)
     ]);
 
-    updateLimitsUI(limitsRes);
-    updateTaskUI(statusRes);
-    updateTailscaleUI(tsRes);
+    if (limitsRes) renderLimits(limitsRes);
+    if (statusRes) renderTask(statusRes);
+    if (tsRes) renderTailscale(tsRes);
   } catch (err) {
     console.error("Error fetching dashboard data:", err);
   }
 }
 
-// Tailscale UI
-function updateTailscaleUI(ts) {
-  const chip = document.getElementById("tailscale-chip");
-  const label = document.getElementById("tailscale-label");
-  const statIp = document.getElementById("stat-tailscale-ip");
-  const sshCmd = document.getElementById("ssh-cmd-text");
+// Render Quota & Limits
+function renderLimits(data) {
+  if (!data || !data.groups) return;
 
-  if (ts.available && ts.ip) {
-    currentTailscaleIp = ts.ip;
-    chip.classList.add("connected");
-    label.textContent = `${ts.hostname || 'nixos'}: ${ts.ip}`;
-    statIp.textContent = ts.ip;
-    if (sshCmd) {
-      sshCmd.textContent = `ssh alsesd@${ts.ip} -t "tmux new -A -s agy"`;
-    }
-  } else {
-    label.textContent = "0.0.0.0 (Local)";
-    statIp.textContent = "127.0.0.1";
-  }
-}
-
-// Limits & Quota UI
-function updateLimitsUI(limits) {
-  if (!limits || !limits.groups) return;
-
-  const quotaPill = document.getElementById("quota-status-pill");
-  if (quotaPill) {
-    if (limits.status === "live") {
-      quotaPill.textContent = "Connected Live";
-      quotaPill.style.color = "var(--gb-green)";
-    } else if (limits.status === "cached") {
-      quotaPill.textContent = "Cached";
-      quotaPill.style.color = "var(--gb-yellow)";
+  const syncStatus = document.getElementById("quota-sync-status");
+  if (syncStatus) {
+    if (data.status === "live") {
+      syncStatus.textContent = "🟢 Live Synced";
+      syncStatus.style.color = "var(--gb-green)";
+    } else if (data.status === "cached") {
+      syncStatus.textContent = "🟡 Cached";
+      syncStatus.style.color = "var(--gb-yellow)";
     } else {
-      quotaPill.textContent = "Offline";
-      quotaPill.style.color = "var(--gb-fg-muted)";
+      syncStatus.textContent = "⚪ Offline";
+      syncStatus.style.color = "var(--gb-fg-muted)";
     }
   }
 
-  // Iterate groups
-  limits.groups.forEach(group => {
+  data.groups.forEach(group => {
     const isGemini = group.displayName && group.displayName.toLowerCase().includes("gemini");
     const is3p = group.displayName && (group.displayName.toLowerCase().includes("claude") || group.displayName.toLowerCase().includes("gpt"));
 
@@ -143,236 +100,207 @@ function updateLimitsUI(limits) {
       group.buckets.forEach(bucket => {
         const remaining = (bucket.remainingFraction !== undefined) ? bucket.remainingFraction : 1.0;
         const pct = Math.round(remaining * 100);
-        const resetText = formatResetTime(bucket.resetTime);
+        const resetText = bucket.formattedReset || formatResetTime(bucket.resetTime);
 
         if (isGemini) {
           if (bucket.window === "weekly" || bucket.bucketId === "gemini-weekly") {
-            setMeter("gemini-weekly", pct, resetText, "fill-green");
+            setMeter("gemini-weekly", pct, resetText);
           } else if (bucket.window === "5h" || bucket.bucketId === "gemini-5h") {
-            setMeter("gemini-5h", pct, resetText, "fill-green");
+            setMeter("gemini-5h", pct, resetText);
           }
         } else if (is3p) {
           if (bucket.window === "weekly" || bucket.bucketId === "3p-weekly") {
-            setMeter("3p-weekly", pct, resetText, "fill-purple");
+            setMeter("3p-weekly", pct, resetText, true);
           } else if (bucket.window === "5h" || bucket.bucketId === "3p-5h") {
-            setMeter("3p-5h", pct, resetText, "fill-purple");
+            setMeter("3p-5h", pct, resetText, true);
           }
         }
       });
     }
   });
-
-  if (limits.description) {
-    const desc = document.getElementById("quota-desc-text");
-    if (desc) desc.textContent = limits.description;
-  }
 }
 
-function setMeter(idPrefix, pct, resetText, defaultClass) {
-  const valElem = document.getElementById(`${idPrefix}-val`);
-  const barElem = document.getElementById(`${idPrefix}-bar`);
-  const resetElem = document.getElementById(`${idPrefix}-reset`);
+function setMeter(idPrefix, pct, resetText, isPurple = false) {
+  const valEl = document.getElementById(`${idPrefix}-val`);
+  const barEl = document.getElementById(`${idPrefix}-bar`);
+  const resetEl = document.getElementById(`${idPrefix}-reset`);
 
-  if (valElem) valElem.textContent = `${pct}%`;
-  if (resetElem) resetElem.textContent = resetText ? `Resets: ${resetText}` : "Limit fully available";
-
-  if (barElem) {
-    barElem.style.width = `${pct}%`;
-    barElem.className = `meter-fill ${getMeterColorClass(pct, defaultClass)}`;
+  if (valEl) valEl.textContent = `${pct}%`;
+  if (barEl) {
+    barEl.style.width = `${pct}%`;
+    barEl.className = "meter-bar";
+    if (isPurple) {
+      barEl.classList.add("fill-purple");
+    } else {
+      if (pct > 40) barEl.classList.add("fill-green");
+      else if (pct > 15) barEl.classList.add("fill-yellow");
+      else barEl.classList.add("fill-red");
+    }
   }
-}
-
-function getMeterColorClass(pct, defaultClass) {
-  if (pct < 20) return "fill-red";
-  if (pct < 50) return "fill-amber";
-  return defaultClass;
+  if (resetEl && resetText) {
+    resetEl.textContent = `Resets: ${resetText}`;
+  }
 }
 
 function formatResetTime(isoStr) {
-  if (!isoStr) return "";
+  if (!isoStr) return "--";
   try {
     const target = new Date(isoStr);
     const now = new Date();
     const diffMs = target - now;
-    if (diffMs <= 0) return "Refreshing soon";
-
-    const hours = Math.floor(diffMs / (1000 * 60 * 60));
-    const mins = Math.floor((diffMs % (1000 * 60 * 60)) / (1000 * 60));
-    const days = Math.floor(hours / 24);
-
-    if (days > 0) return `in ${days}d ${hours % 24}h`;
-    return `in ${hours}h ${mins}m`;
+    if (diffMs <= 0) return "Ready";
+    const totalMinutes = Math.floor(diffMs / 60000);
+    const hours = Math.floor(totalMinutes / 60);
+    const mins = totalMinutes % 60;
+    if (hours >= 24) {
+      const days = Math.floor(hours / 24);
+      const remH = hours % 24;
+      return `${days}d ${remH}h`;
+    }
+    return `${hours}h ${mins}m`;
   } catch (e) {
     return isoStr;
   }
 }
 
-// Current Task UI
-function updateTaskUI(task) {
+// Render Active Task
+function renderTask(task) {
   if (!task) return;
 
   currentConvId = task.conversation_id;
 
-  // Header Agent Chip
-  const agentChip = document.getElementById("agent-chip");
-  const agentLabel = document.getElementById("agent-state-label");
-  const statState = document.getElementById("stat-state");
+  // Header status & model
+  const statusChip = document.getElementById("agent-status-chip");
+  const statusText = document.getElementById("agent-status-text");
+  const modelText = document.getElementById("active-model-name");
 
-  const isRunning = task.not_fully_idle || task.status === "CASCADE_RUN_STATUS_RUNNING";
-  if (isRunning) {
-    agentChip.className = "agent-chip running";
-    agentLabel.textContent = "Running";
-    statState.textContent = "RUNNING";
-    statState.style.color = "var(--gb-aqua)";
+  if (modelText && task.model) {
+    modelText.textContent = task.model;
+  }
+
+  const isRunning = task.status === "CASCADE_RUN_STATUS_RUNNING" || task.not_fully_idle;
+  if (statusChip && statusText) {
+    statusChip.className = "status-chip " + (isRunning ? "running" : "idle");
+    if (isRunning) {
+      if (task.current_action && task.current_action.tool) {
+        statusText.textContent = `Tool: ${task.current_action.tool}`;
+      } else {
+        statusText.textContent = "Running";
+      }
+    } else {
+      statusText.textContent = "Idle";
+    }
+  }
+
+  // Conversation Info
+  const titleEl = document.getElementById("task-title");
+  if (titleEl) titleEl.textContent = task.title || "Antigravity Session";
+
+  const convIdShort = document.getElementById("conv-id-short");
+  if (convIdShort && currentConvId) {
+    convIdShort.textContent = `ID: ${currentConvId.slice(0, 8)}...`;
+  }
+
+  const promptEl = document.getElementById("task-prompt-content");
+  if (promptEl) {
+    promptEl.textContent = task.user_request || "No active prompt";
+  }
+
+  const stepsEl = document.getElementById("task-steps-count");
+  if (stepsEl) {
+    stepsEl.textContent = `Steps: ${task.steps_count || 0}`;
+  }
+
+  // Live Current Action
+  const actionToolBadge = document.getElementById("action-tool-badge");
+  const actionSummary = document.getElementById("action-summary-text");
+  const actionArgs = document.getElementById("action-args-preview");
+
+  if (task.current_action && task.current_action.tool) {
+    if (actionToolBadge) actionToolBadge.textContent = task.current_action.tool;
+    if (actionSummary) actionSummary.textContent = task.current_action.action || task.current_action.summary || "Executing";
+    if (actionArgs) actionArgs.textContent = JSON.stringify(task.current_action.args || {}, null, 2);
   } else {
-    agentChip.className = "agent-chip connected";
-    agentLabel.textContent = "Idle";
-    statState.textContent = "IDLE";
-    statState.style.color = "var(--gb-green)";
+    if (actionToolBadge) actionToolBadge.textContent = isRunning ? "AGENT" : "IDLE";
+    if (actionSummary) actionSummary.textContent = isRunning ? "Thinking / Planning..." : "Awaiting next user instruction";
+    if (actionArgs) actionArgs.textContent = "Ready for instructions.";
   }
 
-  // Conversation Stats
-  if (task.conversation_id) {
-    const shortId = task.conversation_id.substring(0, 16) + "...";
-    document.getElementById("task-id-text").textContent = shortId;
-    document.getElementById("stat-steps").textContent = task.steps_count || 0;
-  }
-
-  // User Request
-  if (task.user_request) {
-    document.getElementById("task-user-request").textContent = task.user_request.trim();
-  }
-
-  // Current Action
-  if (task.current_action) {
-    document.getElementById("active-action-card").style.display = "block";
-    document.getElementById("action-tool-name").textContent = task.current_action.tool || "executing";
-    document.getElementById("action-desc").textContent = task.current_action.action || task.current_action.summary || "Agent working on task...";
-    document.getElementById("action-args").textContent = JSON.stringify(task.current_action.args || {}, null, 2);
-  } else if (!isRunning) {
-    document.getElementById("action-tool-name").textContent = "idle";
-    document.getElementById("action-desc").textContent = "Agent is waiting for next instruction.";
-    document.getElementById("action-args").textContent = "No active tool call.";
-  }
+  // Interactive Question Card
+  renderQuestion(task.pending_question);
 
   // Timeline
-  if (task.recent_steps && task.recent_steps.length > 0) {
-    renderTimeline(task.recent_steps);
+  renderTimeline(task.recent_steps);
+}
+
+// Interactive Question Answering
+function renderQuestion(q) {
+  const card = document.getElementById("question-card");
+  if (!card) return;
+
+  if (!q || !q.questions || q.questions.length === 0) {
+    card.style.display = "none";
+    currentQuestionStep = null;
+    return;
   }
 
-  // Questions Banner & Pane
-  handleQuestionState(task.pending_question);
+  currentQuestionStep = q.step_index;
+  card.style.display = "block";
 
-  // Notifications
-  renderNotifications(task.notifications || []);
-}
+  const promptEl = document.getElementById("q-prompt-text");
+  const optionsContainer = document.getElementById("q-options-list");
 
-function renderTimeline(steps) {
-  const container = document.getElementById("timeline-list");
-  container.innerHTML = "";
+  const questionObj = q.questions[0];
+  if (promptEl) {
+    promptEl.textContent = questionObj.question || "Antigravity needs your input to proceed:";
+  }
 
-  steps.slice().reverse().forEach(st => {
-    const item = document.createElement("div");
-    item.className = "timeline-entry";
-
-    const type = st.type || "GENERIC";
-    let title = type;
-    let snippet = st.content || "";
-
-    if (st.tool_calls && st.tool_calls.length > 0) {
-      const tc = st.tool_calls[0];
-      title = `${tc.name}`;
-      snippet = tc.args ? (tc.args.toolSummary || tc.args.toolAction || JSON.stringify(tc.args)) : "";
-    } else if (st.thinking) {
-      title = "Reasoning";
-      snippet = st.thinking.substring(0, 140) + (st.thinking.length > 140 ? "..." : "");
-    }
-
-    const timeStr = st.created_at ? new Date(st.created_at).toLocaleTimeString() : "";
-
-    item.innerHTML = `
-      <span class="timeline-idx font-mono">#${st.step_index !== undefined ? st.step_index : '-'}</span>
-      <div class="timeline-meta">
-        <div class="timeline-heading">
-          <span class="text-aqua font-mono">${escapeHtml(title)}</span>
-          <span class="text-muted text-xs">${escapeHtml(timeStr)}</span>
-        </div>
-        ${snippet ? `<div class="timeline-text">${escapeHtml(snippet)}</div>` : ''}
-      </div>
-    `;
-    container.appendChild(item);
-  });
-}
-
-function handleQuestionState(q) {
-  const banner = document.getElementById("question-banner");
-  const qBadge = document.getElementById("q-badge");
-  const mobileQBadge = document.getElementById("mobile-q-badge");
-  const qPrompt = document.getElementById("q-prompt-text");
-  const qForm = document.getElementById("question-form");
-  const optionsDiv = document.getElementById("q-options-container");
-
-  if (q && q.questions && q.questions.length > 0) {
-    currentQuestionStep = q;
-    banner.style.display = "flex";
-    if (qBadge) qBadge.style.display = "inline-block";
-    if (mobileQBadge) mobileQBadge.style.display = "flex";
-
-    const questionObj = q.questions[0];
-    document.getElementById("banner-title").textContent = "Question from Antigravity Agent";
-    document.getElementById("banner-text").textContent = questionObj.question || "Tap to answer";
-
-    qPrompt.textContent = questionObj.question;
-    qForm.style.display = "block";
-    optionsDiv.innerHTML = "";
-
-    const isMulti = questionObj.is_multi_select;
+  if (optionsContainer) {
+    optionsContainer.innerHTML = "";
+    const isMulti = Boolean(questionObj.is_multi_select);
     const inputType = isMulti ? "checkbox" : "radio";
 
-    if (questionObj.options) {
+    if (questionObj.options && questionObj.options.length > 0) {
       questionObj.options.forEach((opt, idx) => {
         const label = document.createElement("label");
-        label.className = "q-option-item";
-        label.innerHTML = `
-          <input type="${inputType}" name="q-option" value="${escapeHtml(opt)}" ${idx === 0 && !isMulti ? 'checked' : ''}>
-          <span>${escapeHtml(opt)}</span>
-        `;
-        optionsDiv.appendChild(label);
+        label.className = "q-option-label";
+
+        const input = document.createElement("input");
+        input.type = inputType;
+        input.name = "agent_q_option";
+        input.value = opt;
+        if (idx === 0) input.checked = true;
+
+        const span = document.createElement("span");
+        span.textContent = opt;
+
+        label.appendChild(input);
+        label.appendChild(span);
+        optionsContainer.appendChild(label);
       });
     }
-  } else {
-    currentQuestionStep = null;
-    banner.style.display = "none";
-    if (qBadge) qBadge.style.display = "none";
-    if (mobileQBadge) mobileQBadge.style.display = "none";
-    qPrompt.textContent = "No pending questions from Antigravity.";
-    qForm.style.display = "none";
   }
 }
 
-async function submitQuestionAnswer(e) {
+async function submitAnswer(e) {
   e.preventDefault();
   const btn = document.getElementById("btn-submit-answer");
-  btn.disabled = true;
-  btn.innerHTML = `Sending...`;
+  if (btn) btn.disabled = true;
 
   try {
     const selected = [];
-    document.querySelectorAll("input[name='q-option']:checked").forEach(cb => {
-      selected.push(cb.value);
+    document.querySelectorAll("input[name='agent_q_option']:checked").forEach(inp => {
+      selected.push(inp.value);
     });
 
-    const customText = document.getElementById("q-custom-text").value.trim();
-    let finalAnswer = selected.join("; ");
+    const customText = (document.getElementById("q-custom-input")?.value || "").trim();
+    let finalAnswer = selected.join(", ");
     if (customText) {
-      finalAnswer = finalAnswer ? `${finalAnswer} (Note: ${customText})` : customText;
+      finalAnswer = finalAnswer ? `${finalAnswer} (${customText})` : customText;
     }
 
     if (!finalAnswer) {
-      showToast("Please select an answer or type a note");
-      btn.disabled = false;
-      btn.innerHTML = `Submit Answer to Agent`;
-      return;
+      finalAnswer = "Proceed";
     }
 
     const res = await fetch("/api/answer", {
@@ -380,113 +308,193 @@ async function submitQuestionAnswer(e) {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         conversationId: currentConvId,
-        answer: finalAnswer
+        answer: finalAnswer,
+        stepIndex: currentQuestionStep
       })
-    }).then(r => r.json());
+    });
 
-    if (res.success) {
-      showToast("Answer sent to Antigravity!");
-      document.getElementById("q-custom-text").value = "";
-      handleQuestionState(null);
+    const data = await res.json();
+    if (data.success) {
+      showToast("✓ Answer submitted to Antigravity!");
+      const card = document.getElementById("question-card");
+      if (card) card.style.display = "none";
+      setTimeout(fetchData, 1000);
     } else {
-      showToast(`Error: ${res.error || "Failed to submit"}`);
+      showToast("Error: " + (data.error || "Failed to submit"));
     }
   } catch (err) {
-    showToast(`Error: ${err.message}`);
+    showToast("Network error submitting answer");
   } finally {
-    btn.disabled = false;
-    btn.innerHTML = `Submit Answer to Agent`;
+    if (btn) btn.disabled = false;
   }
 }
 
-function renderNotifications(notifs) {
-  const container = document.getElementById("notifications-list");
-  if (!notifs || notifs.length === 0) {
-    container.innerHTML = `<div class="empty-state">No active notifications.</div>`;
+// Render Timeline
+function renderTimeline(steps) {
+  const container = document.getElementById("timeline-stream");
+  const countBadge = document.getElementById("timeline-count-badge");
+  if (!container) return;
+
+  if (!steps || steps.length === 0) {
+    container.innerHTML = `<div class="empty-state">No recorded steps yet.</div>`;
     return;
   }
 
-  container.innerHTML = "";
-  notifs.forEach(n => {
-    const div = document.createElement("div");
-    div.className = "timeline-entry";
-    div.innerHTML = `
-      <span class="font-mono text-xs">🔔</span>
-      <div class="timeline-meta">
-        <div class="timeline-heading">${escapeHtml(n.type || "Notice")}</div>
-        <div class="timeline-text">${escapeHtml(n.snippet || "")}</div>
+  if (countBadge) countBadge.textContent = `${steps.length} steps`;
+
+  let html = "";
+  // Show most recent at top
+  const reversed = [...steps].reverse();
+
+  reversed.forEach(s => {
+    let icon = "⚡";
+    if (s.tool === "run_command") icon = "💻";
+    else if (s.tool === "replace_file_content" || s.tool === "write_to_file") icon = "📝";
+    else if (s.tool === "view_file") icon = "👁️";
+    else if (s.tool === "ask_question") icon = "❓";
+    else if (s.type === "USER_INPUT") icon = "👤";
+
+    const desc = s.action || s.summary || (s.tool ? s.tool : "Action");
+
+    html += `
+      <div class="timeline-item">
+        <span class="step-num font-mono">#${s.step_index !== undefined ? s.step_index : "-"}</span>
+        <span class="step-icon">${icon}</span>
+        <div class="step-desc">
+          ${s.tool ? `<span class="step-tool font-mono">${s.tool}:</span>` : ""}
+          <span>${escapeHtml(desc)}</span>
+        </div>
       </div>
     `;
-    container.appendChild(div);
   });
+
+  container.innerHTML = html;
 }
 
-// Terminal Helpers & Mobile Virtual Keys
+// Render Tailscale Info
+function renderTailscale(ts) {
+  if (!ts) return;
+
+  const badgeText = document.getElementById("ts-badge-text");
+  const connBadge = document.getElementById("ts-connection-badge");
+  const textIp = document.getElementById("text-ts-ip");
+  const dnsLink = document.getElementById("link-ts-dns");
+  const portLink = document.getElementById("link-direct-port");
+  const sshCode = document.getElementById("ssh-command-code");
+
+  if (ts.available && ts.ip) {
+    currentTailscaleIp = ts.ip;
+    if (badgeText) badgeText.textContent = ts.hostname || "agydash";
+    if (connBadge) connBadge.textContent = "Tailscale Connected";
+    if (textIp) textIp.textContent = ts.ip;
+
+    const dnsHost = ts.magic_dns || `${ts.hostname}.tail42f05a.ts.net`;
+    if (dnsLink) {
+      dnsLink.textContent = `https://${dnsHost}`;
+      dnsLink.href = `https://${dnsHost}`;
+    }
+
+    if (portLink) {
+      portLink.textContent = `http://${ts.ip}:9090`;
+      portLink.href = `http://${ts.ip}:9090`;
+    }
+
+    if (sshCode) {
+      sshCode.textContent = `ssh alsesd@${ts.ip} -t "tmux new -A -s agy"`;
+    }
+  } else {
+    if (badgeText) badgeText.textContent = "Local";
+    if (connBadge) connBadge.textContent = "Binding to 0.0.0.0";
+  }
+}
+
+// Terminal Drawer Controls
+function setupTerminalDrawer() {
+  const drawer = document.getElementById("terminal-drawer");
+  const backdrop = document.getElementById("terminal-backdrop");
+  const openBtn = document.getElementById("btn-open-terminal");
+  const closeBtn = document.getElementById("btn-close-terminal");
+  const placeholder = document.getElementById("terminal-placeholder");
+
+  function openDrawer() {
+    drawer.classList.add("open");
+    backdrop.classList.add("open");
+    loadTerminalIframe();
+  }
+
+  function closeDrawer() {
+    drawer.classList.remove("open");
+    backdrop.classList.remove("open");
+  }
+
+  if (openBtn) openBtn.addEventListener("click", openDrawer);
+  if (closeBtn) closeBtn.addEventListener("click", closeDrawer);
+  if (backdrop) backdrop.addEventListener("click", closeDrawer);
+  if (placeholder) placeholder.addEventListener("click", loadTerminalIframe);
+}
+
+function loadTerminalIframe() {
+  const viewport = document.querySelector(".drawer-viewport");
+  if (!viewport || isTerminalLoaded) return;
+
+  viewport.innerHTML = `<iframe id="terminal-iframe" src="/terminal/" frameborder="0" allowfullscreen></iframe>`;
+  isTerminalLoaded = true;
+}
+
 function reloadTerminal() {
   const iframe = document.getElementById("terminal-iframe");
-  iframe.src = iframe.src;
-  showToast("Terminal reconnected");
-}
-
-function toggleTerminalFullscreen() {
-  const container = document.getElementById("terminal-container");
-  if (!document.fullscreenElement) {
-    container.requestFullscreen().catch(err => {
-      console.warn("Fullscreen request error:", err);
-    });
+  if (iframe) {
+    iframe.src = iframe.src;
+    showToast("Terminal reloaded");
   } else {
-    document.exitFullscreen();
+    loadTerminalIframe();
   }
 }
 
-function sendKeyToTerm(key) {
+function sendKey(key) {
   const iframe = document.getElementById("terminal-iframe");
-  if (!iframe || !iframe.contentWindow) return;
+  if (!iframe) return;
 
+  // Sends simulated key event to terminal iframe if reachable
   try {
-    // Focus iframe
-    iframe.contentWindow.focus();
+    const doc = iframe.contentDocument || iframe.contentWindow.document;
+    const canvas = doc.querySelector(".xterm-helper-textarea") || doc.querySelector("textarea") || doc.body;
+    let char = "";
+    if (key === "Enter") char = "\r";
+    else if (key === "Tab") char = "\t";
+    else if (key === "Escape") char = "\x1b";
+    else if (key === "CtrlC") char = "\x03";
+    else if (key === "Up") char = "\x1b[A";
+    else if (key === "Down") char = "\x1b[B";
+    else if (key === "Clear") char = "\x0c";
 
-    // Map keys to ANSI sequences or keyboard events
-    let charCode = 0;
-    let eventKey = key;
-    if (key === 'Escape') charCode = 27;
-    else if (key === 'Tab') charCode = 9;
-    else if (key === 'Enter') charCode = 13;
-    else if (key === 'CtrlC') charCode = 3;
-    else if (key === 'Up') eventKey = 'ArrowUp';
-    else if (key === 'Down') eventKey = 'ArrowDown';
-
-    const evt = new KeyboardEvent('keydown', {
-      key: eventKey,
-      keyCode: charCode,
-      which: charCode,
-      bubbles: true,
-      cancelable: true
-    });
-    iframe.contentDocument.dispatchEvent(evt);
+    if (canvas && char) {
+      canvas.focus();
+      canvas.value = char;
+      const evt = new CustomEvent("input", { bubbles: true });
+      canvas.dispatchEvent(evt);
+    }
   } catch (e) {
-    console.log("Virtual key dispatch note:", e);
+    // Cross-origin restriction fallback
   }
 }
 
-function copySshCommand() {
-  const ip = currentTailscaleIp || "100.109.108.22";
-  const cmd = `ssh alsesd@${ip} -t "tmux new -A -s agy"`;
-  navigator.clipboard.writeText(cmd).then(() => {
-    showToast("Copied: " + cmd);
+// Utilities
+function copyConversationId() {
+  if (!currentConvId) return;
+  navigator.clipboard.writeText(currentConvId).then(() => {
+    showToast("Copied conversation ID");
   });
 }
 
-function copyConvId() {
-  if (currentConvId) {
-    navigator.clipboard.writeText(currentConvId).then(() => {
-      showToast("Copied Conversation ID");
-    });
-  }
+function copySSHCommand() {
+  const code = document.getElementById("ssh-command-code")?.textContent;
+  if (!code) return;
+  navigator.clipboard.writeText(code).then(() => {
+    showToast("Copied SSH command");
+  });
 }
 
-// Toast
 function showToast(msg) {
   const toast = document.getElementById("toast");
   if (!toast) return;
@@ -494,10 +502,9 @@ function showToast(msg) {
   toast.classList.add("show");
   setTimeout(() => {
     toast.classList.remove("show");
-  }, 2200);
+  }, 2500);
 }
 
-// Utility
 function escapeHtml(str) {
   if (!str) return "";
   return String(str)
