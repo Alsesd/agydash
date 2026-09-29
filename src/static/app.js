@@ -1,4 +1,4 @@
-// Antigravity Web Dashboard Client Application
+// Antigravity Web Dashboard Client Application (Gruvbox Edition)
 
 let currentConvId = null;
 let currentTailscaleIp = null;
@@ -12,30 +12,43 @@ document.addEventListener("DOMContentLoaded", () => {
   fetchInitialData();
 
   // Manual refresh button
-  document.getElementById("refresh-btn").addEventListener("click", () => {
-    fetchInitialData();
-    showToast("Dashboard refreshed");
-  });
+  const refreshBtn = document.getElementById("refresh-btn");
+  if (refreshBtn) {
+    refreshBtn.addEventListener("click", () => {
+      fetchInitialData();
+      showToast("Refreshed");
+    });
+  }
 });
 
-// Tab Navigation
+// Tab Navigation (both desktop and mobile)
 function setupTabs() {
-  const tabs = document.querySelectorAll(".tab-btn");
-  tabs.forEach(tab => {
-    tab.addEventListener("click", () => {
-      const target = tab.getAttribute("data-tab");
-      switchTab(target);
-    });
-  });
+  const desktopTabs = document.querySelectorAll(".nav-tab");
+  const mobileTabs = document.querySelectorAll(".mobile-nav-btn");
+
+  function handleTabClick(btn) {
+    const target = btn.getAttribute("data-tab");
+    switchTab(target);
+  }
+
+  desktopTabs.forEach(tab => tab.addEventListener("click", () => handleTabClick(tab)));
+  mobileTabs.forEach(tab => tab.addEventListener("click", () => handleTabClick(tab)));
 }
 
 function switchTab(tabId) {
-  document.querySelectorAll(".tab-btn").forEach(btn => {
+  // Update desktop tabs
+  document.querySelectorAll(".nav-tab").forEach(btn => {
     btn.classList.toggle("active", btn.getAttribute("data-tab") === tabId);
   });
 
-  document.querySelectorAll(".tab-content").forEach(content => {
-    content.classList.toggle("active", content.id === `tab-${tabId}`);
+  // Update mobile bottom nav buttons
+  document.querySelectorAll(".mobile-nav-btn").forEach(btn => {
+    btn.classList.toggle("active", btn.getAttribute("data-tab") === tabId);
+  });
+
+  // Update panels
+  document.querySelectorAll(".view-panel").forEach(panel => {
+    panel.classList.toggle("active", panel.id === `tab-${tabId}`);
   });
 }
 
@@ -49,21 +62,19 @@ function initSSE() {
 
   sseSource.onmessage = (event) => {
     try {
-      const data = jsonParseSafe(event.data);
+      const data = JSON.parse(event.data);
       if (data) {
         if (data.limits) updateLimitsUI(data.limits);
         if (data.task) updateTaskUI(data.task);
       }
-      document.getElementById("live-indicator").style.opacity = "1";
     } catch (e) {
       console.error("SSE parse error:", e);
     }
   };
 
   sseSource.onerror = () => {
-    document.getElementById("live-indicator").style.opacity = "0.4";
-    // Fallback polling if SSE disconnects
-    setTimeout(fetchInitialData, 3000);
+    // Retry polling if stream drops
+    setTimeout(fetchInitialData, 4000);
   };
 }
 
@@ -80,29 +91,28 @@ async function fetchInitialData() {
     updateTaskUI(statusRes);
     updateTailscaleUI(tsRes);
   } catch (err) {
-    console.error("Error fetching initial dashboard data:", err);
+    console.error("Error fetching dashboard data:", err);
   }
 }
 
 // Tailscale UI
 function updateTailscaleUI(ts) {
-  const pill = document.getElementById("tailscale-pill");
-  const val = document.getElementById("tailscale-val");
+  const chip = document.getElementById("tailscale-chip");
+  const label = document.getElementById("tailscale-label");
   const statIp = document.getElementById("stat-tailscale-ip");
-  const statNode = document.getElementById("stat-tailscale-node");
   const sshCmd = document.getElementById("ssh-cmd-text");
 
   if (ts.available && ts.ip) {
     currentTailscaleIp = ts.ip;
-    pill.classList.add("connected");
-    val.textContent = `${ts.hostname || 'nixos'} (${ts.ip})`;
+    chip.classList.add("connected");
+    label.textContent = `${ts.hostname || 'nixos'}: ${ts.ip}`;
     statIp.textContent = ts.ip;
-    statNode.textContent = `Node: ${ts.hostname || 'nixos'} (Tailscale Connected)`;
-    sshCmd.textContent = `ssh alsesd@${ts.ip} -t "tmux new -A -s agy"`;
+    if (sshCmd) {
+      sshCmd.textContent = `ssh alsesd@${ts.ip} -t "tmux new -A -s agy"`;
+    }
   } else {
-    val.textContent = "0.0.0.0 (Local)";
+    label.textContent = "0.0.0.0 (Local)";
     statIp.textContent = "127.0.0.1";
-    statNode.textContent = "Tailscale offline or disconnected";
   }
 }
 
@@ -110,18 +120,18 @@ function updateTailscaleUI(ts) {
 function updateLimitsUI(limits) {
   if (!limits || !limits.groups) return;
 
-  const quotaBadge = document.getElementById("quota-source");
-  if (limits.status === "live") {
-    quotaBadge.textContent = "Connected Live";
-    quotaBadge.style.color = "var(--accent-green)";
-    quotaBadge.style.borderColor = "rgba(0, 230, 118, 0.3)";
-  } else if (limits.status === "cached") {
-    quotaBadge.textContent = "Cached";
-    quotaBadge.style.color = "var(--accent-amber)";
-    quotaBadge.style.borderColor = "rgba(255, 179, 0, 0.3)";
-  } else {
-    quotaBadge.textContent = "Offline";
-    quotaBadge.style.color = "var(--text-muted)";
+  const quotaPill = document.getElementById("quota-status-pill");
+  if (quotaPill) {
+    if (limits.status === "live") {
+      quotaPill.textContent = "Connected Live";
+      quotaPill.style.color = "var(--gb-green)";
+    } else if (limits.status === "cached") {
+      quotaPill.textContent = "Cached";
+      quotaPill.style.color = "var(--gb-yellow)";
+    } else {
+      quotaPill.textContent = "Offline";
+      quotaPill.style.color = "var(--gb-fg-muted)";
+    }
   }
 
   // Iterate groups
@@ -153,7 +163,8 @@ function updateLimitsUI(limits) {
   });
 
   if (limits.description) {
-    document.getElementById("quota-desc-text").textContent = limits.description;
+    const desc = document.getElementById("quota-desc-text");
+    if (desc) desc.textContent = limits.description;
   }
 }
 
@@ -167,7 +178,7 @@ function setMeter(idPrefix, pct, resetText, defaultClass) {
 
   if (barElem) {
     barElem.style.width = `${pct}%`;
-    barElem.className = `progress-bar-fill ${getMeterColorClass(pct, defaultClass)}`;
+    barElem.className = `meter-fill ${getMeterColorClass(pct, defaultClass)}`;
   }
 }
 
@@ -189,9 +200,7 @@ function formatResetTime(isoStr) {
     const mins = Math.floor((diffMs % (1000 * 60 * 60)) / (1000 * 60));
     const days = Math.floor(hours / 24);
 
-    if (days > 0) {
-      return `in ${days}d ${hours % 24}h`;
-    }
+    if (days > 0) return `in ${days}d ${hours % 24}h`;
     return `in ${hours}h ${mins}m`;
   } catch (e) {
     return isoStr;
@@ -204,30 +213,29 @@ function updateTaskUI(task) {
 
   currentConvId = task.conversation_id;
 
-  // Agent Pill
-  const agentPill = document.getElementById("agent-pill");
-  const agentVal = document.getElementById("agent-val");
+  // Header Agent Chip
+  const agentChip = document.getElementById("agent-chip");
+  const agentLabel = document.getElementById("agent-state-label");
   const statState = document.getElementById("stat-state");
 
   const isRunning = task.not_fully_idle || task.status === "CASCADE_RUN_STATUS_RUNNING";
   if (isRunning) {
-    agentPill.className = "status-pill agent-pill running";
-    agentVal.textContent = "Running";
+    agentChip.className = "agent-chip running";
+    agentLabel.textContent = "Running";
     statState.textContent = "RUNNING";
-    statState.style.color = "var(--accent-cyan)";
+    statState.style.color = "var(--gb-aqua)";
   } else {
-    agentPill.className = "status-pill agent-pill connected";
-    agentVal.textContent = "Idle";
+    agentChip.className = "agent-chip connected";
+    agentLabel.textContent = "Idle";
     statState.textContent = "IDLE";
-    statState.style.color = "var(--accent-green)";
+    statState.style.color = "var(--gb-green)";
   }
 
-  // Conversation Info
+  // Conversation Stats
   if (task.conversation_id) {
-    document.getElementById("task-id-text").textContent = task.conversation_id.substring(0, 18) + "...";
+    const shortId = task.conversation_id.substring(0, 16) + "...";
+    document.getElementById("task-id-text").textContent = shortId;
     document.getElementById("stat-steps").textContent = task.steps_count || 0;
-    document.getElementById("stat-conv-title").textContent = task.title || "Active Session";
-    document.getElementById("task-header-subtitle").textContent = task.title || "Active Session";
   }
 
   // User Request
@@ -235,17 +243,16 @@ function updateTaskUI(task) {
     document.getElementById("task-user-request").textContent = task.user_request.trim();
   }
 
-  // Current Action Card
-  const actionCard = document.getElementById("active-action-card");
+  // Current Action
   if (task.current_action) {
-    actionCard.style.display = "block";
+    document.getElementById("active-action-card").style.display = "block";
     document.getElementById("action-tool-name").textContent = task.current_action.tool || "executing";
     document.getElementById("action-desc").textContent = task.current_action.action || task.current_action.summary || "Agent working on task...";
     document.getElementById("action-args").textContent = JSON.stringify(task.current_action.args || {}, null, 2);
   } else if (!isRunning) {
     document.getElementById("action-tool-name").textContent = "idle";
     document.getElementById("action-desc").textContent = "Agent is waiting for next instruction.";
-    document.getElementById("action-args").textContent = "No active tool call in progress.";
+    document.getElementById("action-args").textContent = "No active tool call.";
   }
 
   // Timeline
@@ -266,7 +273,7 @@ function renderTimeline(steps) {
 
   steps.slice().reverse().forEach(st => {
     const item = document.createElement("div");
-    item.className = "timeline-item";
+    item.className = "timeline-entry";
 
     const type = st.type || "GENERIC";
     let title = type;
@@ -274,23 +281,23 @@ function renderTimeline(steps) {
 
     if (st.tool_calls && st.tool_calls.length > 0) {
       const tc = st.tool_calls[0];
-      title = `Tool: ${tc.name}`;
+      title = `${tc.name}`;
       snippet = tc.args ? (tc.args.toolSummary || tc.args.toolAction || JSON.stringify(tc.args)) : "";
     } else if (st.thinking) {
-      title = "Agent Reasoning";
-      snippet = st.thinking.substring(0, 160) + (st.thinking.length > 160 ? "..." : "");
+      title = "Reasoning";
+      snippet = st.thinking.substring(0, 140) + (st.thinking.length > 140 ? "..." : "");
     }
 
     const timeStr = st.created_at ? new Date(st.created_at).toLocaleTimeString() : "";
 
     item.innerHTML = `
-      <div class="timeline-step-badge">#${st.step_index !== undefined ? st.step_index : '-'}</div>
-      <div class="timeline-body">
-        <div class="timeline-title">
-          <span>${escapeHtml(title)}</span>
-          <span class="timeline-time">${escapeHtml(timeStr)}</span>
+      <span class="timeline-idx font-mono">#${st.step_index !== undefined ? st.step_index : '-'}</span>
+      <div class="timeline-meta">
+        <div class="timeline-heading">
+          <span class="text-aqua font-mono">${escapeHtml(title)}</span>
+          <span class="text-muted text-xs">${escapeHtml(timeStr)}</span>
         </div>
-        ${snippet ? `<div class="timeline-content">${escapeHtml(snippet)}</div>` : ''}
+        ${snippet ? `<div class="timeline-text">${escapeHtml(snippet)}</div>` : ''}
       </div>
     `;
     container.appendChild(item);
@@ -299,9 +306,8 @@ function renderTimeline(steps) {
 
 function handleQuestionState(q) {
   const banner = document.getElementById("question-banner");
-  const tabBadge = document.getElementById("tab-notif-count");
-  const notifBadge = document.getElementById("notif-badge");
-  const qContainer = document.getElementById("question-container");
+  const qBadge = document.getElementById("q-badge");
+  const mobileQBadge = document.getElementById("mobile-q-badge");
   const qPrompt = document.getElementById("q-prompt-text");
   const qForm = document.getElementById("question-form");
   const optionsDiv = document.getElementById("q-options-container");
@@ -309,14 +315,12 @@ function handleQuestionState(q) {
   if (q && q.questions && q.questions.length > 0) {
     currentQuestionStep = q;
     banner.style.display = "flex";
-    tabBadge.style.display = "inline-block";
-    tabBadge.textContent = "1";
-    notifBadge.style.display = "flex";
-    notifBadge.textContent = "1";
+    if (qBadge) qBadge.style.display = "inline-block";
+    if (mobileQBadge) mobileQBadge.style.display = "flex";
 
     const questionObj = q.questions[0];
     document.getElementById("banner-title").textContent = "Question from Antigravity Agent";
-    document.getElementById("banner-text").textContent = questionObj.question || "Please select an option or answer to proceed.";
+    document.getElementById("banner-text").textContent = questionObj.question || "Tap to answer";
 
     qPrompt.textContent = questionObj.question;
     qForm.style.display = "block";
@@ -327,20 +331,20 @@ function handleQuestionState(q) {
 
     if (questionObj.options) {
       questionObj.options.forEach((opt, idx) => {
-        const tile = document.createElement("label");
-        tile.className = "option-tile";
-        tile.innerHTML = `
+        const label = document.createElement("label");
+        label.className = "q-option-item";
+        label.innerHTML = `
           <input type="${inputType}" name="q-option" value="${escapeHtml(opt)}" ${idx === 0 && !isMulti ? 'checked' : ''}>
           <span>${escapeHtml(opt)}</span>
         `;
-        optionsDiv.appendChild(tile);
+        optionsDiv.appendChild(label);
       });
     }
   } else {
     currentQuestionStep = null;
     banner.style.display = "none";
-    tabBadge.style.display = "none";
-    notifBadge.style.display = "none";
+    if (qBadge) qBadge.style.display = "none";
+    if (mobileQBadge) mobileQBadge.style.display = "none";
     qPrompt.textContent = "No pending questions from Antigravity.";
     qForm.style.display = "none";
   }
@@ -350,7 +354,7 @@ async function submitQuestionAnswer(e) {
   e.preventDefault();
   const btn = document.getElementById("btn-submit-answer");
   btn.disabled = true;
-  btn.innerHTML = `<span class="spinner-ring"></span> Sending...`;
+  btn.innerHTML = `Sending...`;
 
   try {
     const selected = [];
@@ -365,7 +369,7 @@ async function submitQuestionAnswer(e) {
     }
 
     if (!finalAnswer) {
-      showToast("Please select an option or enter an answer");
+      showToast("Please select an answer or type a note");
       btn.disabled = false;
       btn.innerHTML = `Submit Answer to Agent`;
       return;
@@ -398,30 +402,30 @@ async function submitQuestionAnswer(e) {
 function renderNotifications(notifs) {
   const container = document.getElementById("notifications-list");
   if (!notifs || notifs.length === 0) {
-    container.innerHTML = `<div class="timeline-empty">No active notifications.</div>`;
+    container.innerHTML = `<div class="empty-state">No active notifications.</div>`;
     return;
   }
 
   container.innerHTML = "";
   notifs.forEach(n => {
     const div = document.createElement("div");
-    div.className = "timeline-item";
+    div.className = "timeline-entry";
     div.innerHTML = `
-      <div class="timeline-step-badge">🔔</div>
-      <div class="timeline-body">
-        <div class="timeline-title">${escapeHtml(n.type || "System Notice")}</div>
-        <div class="timeline-content">${escapeHtml(n.snippet || "")}</div>
+      <span class="font-mono text-xs">🔔</span>
+      <div class="timeline-meta">
+        <div class="timeline-heading">${escapeHtml(n.type || "Notice")}</div>
+        <div class="timeline-text">${escapeHtml(n.snippet || "")}</div>
       </div>
     `;
     container.appendChild(div);
   });
 }
 
-// Terminal Helpers
+// Terminal Helpers & Mobile Virtual Keys
 function reloadTerminal() {
   const iframe = document.getElementById("terminal-iframe");
   iframe.src = iframe.src;
-  showToast("Reconnected terminal session");
+  showToast("Terminal reconnected");
 }
 
 function toggleTerminalFullscreen() {
@@ -435,18 +439,49 @@ function toggleTerminalFullscreen() {
   }
 }
 
+function sendKeyToTerm(key) {
+  const iframe = document.getElementById("terminal-iframe");
+  if (!iframe || !iframe.contentWindow) return;
+
+  try {
+    // Focus iframe
+    iframe.contentWindow.focus();
+
+    // Map keys to ANSI sequences or keyboard events
+    let charCode = 0;
+    let eventKey = key;
+    if (key === 'Escape') charCode = 27;
+    else if (key === 'Tab') charCode = 9;
+    else if (key === 'Enter') charCode = 13;
+    else if (key === 'CtrlC') charCode = 3;
+    else if (key === 'Up') eventKey = 'ArrowUp';
+    else if (key === 'Down') eventKey = 'ArrowDown';
+
+    const evt = new KeyboardEvent('keydown', {
+      key: eventKey,
+      keyCode: charCode,
+      which: charCode,
+      bubbles: true,
+      cancelable: true
+    });
+    iframe.contentDocument.dispatchEvent(evt);
+  } catch (e) {
+    console.log("Virtual key dispatch note:", e);
+  }
+}
+
 function copySshCommand() {
   const ip = currentTailscaleIp || "100.109.108.22";
   const cmd = `ssh alsesd@${ip} -t "tmux new -A -s agy"`;
   navigator.clipboard.writeText(cmd).then(() => {
-    showToast("SSH command copied to clipboard!");
+    showToast("Copied: " + cmd);
   });
 }
 
 function copyConvId() {
   if (currentConvId) {
     navigator.clipboard.writeText(currentConvId).then(() => {
-      showToast("Conversation ID copied!");
+      showToast("Copied Conversation ID");
     });
   }
 }
@@ -454,11 +489,12 @@ function copyConvId() {
 // Toast
 function showToast(msg) {
   const toast = document.getElementById("toast");
+  if (!toast) return;
   toast.textContent = msg;
   toast.classList.add("show");
   setTimeout(() => {
     toast.classList.remove("show");
-  }, 2500);
+  }, 2200);
 }
 
 // Utility
@@ -470,12 +506,4 @@ function escapeHtml(str) {
     .replace(/>/g, "&gt;")
     .replace(/"/g, "&quot;")
     .replace(/'/g, "&#039;");
-}
-
-function jsonParseSafe(str) {
-  try {
-    return JSON.parse(str);
-  } catch (e) {
-    return null;
-  }
 }
