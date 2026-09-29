@@ -1,0 +1,170 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
+PORT="${PORT:-9090}"
+HOST="${HOST:-0.0.0.0}"
+
+SERVICE_NAME="antigravity-dashboard.service"
+USER_SYSTEMD_DIR="${HOME}/.config/systemd/user"
+
+show_help() {
+  cat <<EOF
+Antigravity Dashboard Control Utility
+
+Usage:
+  antigravity-dashboard [command] [options]
+
+Commands:
+  start [--host HOST] [--port PORT]   Start the dashboard in foreground
+  service install                     Install and enable systemd user service for autolaunch
+  service start                       Start the systemd user service
+  service stop                        Stop the systemd user service
+  service restart                     Restart the systemd user service
+  service status                      Check the status of the systemd user service
+  service logs                        Follow logs from systemd user service
+  tailscale                           Show Tailscale connection status and URLs
+  help                                Show this help message
+
+Options:
+  --port PORT                         Port to listen on (default: 9090)
+  --host HOST                         Host interface to bind (default: 0.0.0.0)
+EOF
+}
+
+cmd_start() {
+  local host="$HOST"
+  local port="$PORT"
+
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --host) host="$2"; shift 2 ;;
+      --port) port="$2"; shift 2 ;;
+      *) shift ;;
+    esac
+  done
+
+  if [[ ! -x "$PROJECT_ROOT/result/bin/antigravity-dashboard" ]]; then
+    echo "Building dashboard package with Nix..."
+    (cd "$PROJECT_ROOT" && nix build --out-link "$PROJECT_ROOT/result")
+  fi
+
+  export PORT="$port"
+  export HOST="$host"
+  exec "$PROJECT_ROOT/result/bin/antigravity-dashboard" --host "$host" --port "$port"
+}
+
+cmd_service() {
+  local action="${1:-status}"
+  case "$action" in
+    install)
+      mkdir -p "$USER_SYSTEMD_DIR"
+      local unit_file="$USER_SYSTEMD_DIR/$SERVICE_NAME"
+      
+      echo "Ensuring dashboard package is built with Nix..."
+      (cd "$PROJECT_ROOT" && nix build --out-link "$PROJECT_ROOT/result")
+      local exec_bin="$PROJECT_ROOT/result/bin/antigravity-dashboard"
+
+      cat > "$unit_file" <<UNIT
+[Unit]
+Description=Antigravity Web Dashboard & Terminal Daemon
+After=network.target tailscale.service
+Wants=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=$PROJECT_ROOT
+Environment=PORT=$PORT
+Environment=HOST=$HOST
+ExecStart=$exec_bin --host $HOST --port $PORT
+Restart=always
+RestartSec=3
+KillMode=mixed
+
+[Install]
+WantedBy=default.target
+UNIT
+
+      echo "✓ Created systemd user unit: $unit_file"
+      systemctl --user daemon-reload
+      systemctl --user enable "$SERVICE_NAME"
+      systemctl --user restart "$SERVICE_NAME"
+      echo "✓ Enabled and started $SERVICE_NAME"
+      echo ""
+      cmd_tailscale
+      ;;
+
+    start)
+      systemctl --user start "$SERVICE_NAME"
+      echo "✓ Started $SERVICE_NAME"
+      ;;
+
+    stop)
+      systemctl --user stop "$SERVICE_NAME"
+      echo "✓ Stopped $SERVICE_NAME"
+      ;;
+
+    restart)
+      systemctl --user restart "$SERVICE_NAME"
+      echo "✓ Restarted $SERVICE_NAME"
+      ;;
+
+    status)
+      systemctl --user status "$SERVICE_NAME" --no-pager || true
+      ;;
+
+    logs)
+      journalctl --user -u "$SERVICE_NAME" -f -n 50
+      ;;
+
+    *)
+      echo "Unknown service action: $action"
+      echo "Available: install, start, stop, restart, status, logs"
+      exit 1
+      ;;
+  esac
+}
+
+cmd_tailscale() {
+  local ts_ip
+  ts_ip="$(tailscale ip -4 2>/dev/null || echo "")"
+  local hostname
+  hostname="$(hostname)"
+
+  echo "==========================================================="
+  echo " 🚀 Antigravity Web Dashboard Access Information"
+  echo "==========================================================="
+  echo " • Localhost:      http://localhost:$PORT"
+  if [[ -n "$ts_ip" ]]; then
+    echo " • Tailscale IP:   http://$ts_ip:$PORT"
+    echo " • Tailscale Host: http://$hostname:$PORT"
+    echo " • Tailscale SSH:  ssh $USER@$ts_ip -t 'tmux new -A -s agy'"
+  else
+    echo " • Tailscale:      Not active (bound to 0.0.0.0:$PORT)"
+  fi
+  echo "==========================================================="
+}
+
+ACTION="${1:-start}"
+shift || true
+
+case "$ACTION" in
+  start)
+    cmd_start "$@"
+    ;;
+  service)
+    cmd_service "${1:-status}"
+    ;;
+  tailscale)
+    cmd_tailscale
+    ;;
+  help|--help|-h)
+    show_help
+    ;;
+  *)
+    echo "Unknown command: $ACTION"
+    show_help
+    exit 1
+    ;;
+esac
