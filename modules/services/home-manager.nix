@@ -14,13 +14,13 @@
 
         port = lib.mkOption {
           type = lib.types.port;
-          default = 9090;
-          description = "Port to listen on (accessible via Tailscale IP or localhost).";
+          default = 8765;
+          description = "Port to listen on (strictly bound to localhost).";
         };
 
         host = lib.mkOption {
           type = lib.types.str;
-          default = "0.0.0.0";
+          default = "127.0.0.1";
           description = "Host interface address to bind.";
         };
       };

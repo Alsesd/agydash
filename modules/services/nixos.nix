@@ -14,14 +14,14 @@
 
         port = lib.mkOption {
           type = lib.types.port;
-          default = 9090;
-          description = "Port to listen on (accessible via Tailscale IP or localhost).";
+          default = 8765;
+          description = "Port to listen on (strictly bound to localhost).";
         };
 
         host = lib.mkOption {
           type = lib.types.str;
-          default = "0.0.0.0";
-          description = "Host interface address to bind (0.0.0.0 exposes over Tailscale and local interfaces).";
+          default = "127.0.0.1";
+          description = "Host interface address to bind strictly on localhost.";
         };
 
         user = lib.mkOption {
@@ -32,7 +32,7 @@
 
         openFirewall = lib.mkOption {
           type = lib.types.bool;
-          default = true;
+          default = false;
           description = "Automatically open the dashboard port in firewall.";
         };
       };

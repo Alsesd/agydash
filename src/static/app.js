@@ -20,6 +20,8 @@ document.addEventListener("DOMContentLoaded", () => {
   }
 });
 
+const BASE_PATH = window.location.pathname.startsWith("/agydash") ? "/agydash" : "";
+
 // SSE Stream with Polling Fallback
 function initDataFeed() {
   fetchData(); // initial fetch immediately
@@ -27,7 +29,7 @@ function initDataFeed() {
   if (window.EventSource) {
     try {
       if (sseSource) sseSource.close();
-      sseSource = new EventSource("/api/stream");
+      sseSource = new EventSource(`${BASE_PATH}/api/stream`);
 
       sseSource.onmessage = (event) => {
         try {
@@ -61,9 +63,9 @@ function startFallbackPolling() {
 async function fetchData() {
   try {
     const [limitsRes, statusRes, tsRes] = await Promise.all([
-      fetch("/api/limits").then(r => r.json()).catch(() => null),
-      fetch("/api/status").then(r => r.json()).catch(() => null),
-      fetch("/api/tailscale").then(r => r.json()).catch(() => null)
+      fetch(`${BASE_PATH}/api/limits`).then(r => r.json()).catch(() => null),
+      fetch(`${BASE_PATH}/api/status`).then(r => r.json()).catch(() => null),
+      fetch(`${BASE_PATH}/api/tailscale`).then(r => r.json()).catch(() => null)
     ]);
 
     if (limitsRes) renderLimits(limitsRes);
@@ -303,7 +305,7 @@ async function submitAnswer(e) {
       finalAnswer = "Proceed";
     }
 
-    const res = await fetch("/api/answer", {
+    const res = await fetch(`${BASE_PATH}/api/answer`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -384,19 +386,19 @@ function renderTailscale(ts) {
 
   if (ts.available && ts.ip) {
     currentTailscaleIp = ts.ip;
-    if (badgeText) badgeText.textContent = ts.hostname || "agydash";
+    if (badgeText) badgeText.textContent = ts.hostname || "nixos";
     if (connBadge) connBadge.textContent = "Tailscale Connected";
     if (textIp) textIp.textContent = ts.ip;
 
     const dnsHost = ts.magic_dns || `${ts.hostname}.tail42f05a.ts.net`;
     if (dnsLink) {
-      dnsLink.textContent = `https://${dnsHost}`;
-      dnsLink.href = `https://${dnsHost}`;
+      dnsLink.textContent = `https://${dnsHost}/agydash`;
+      dnsLink.href = `https://${dnsHost}/agydash`;
     }
 
     if (portLink) {
-      portLink.textContent = `http://${ts.ip}:9090`;
-      portLink.href = `http://${ts.ip}:9090`;
+      portLink.textContent = `http://127.0.0.1:8765`;
+      portLink.href = `http://127.0.0.1:8765`;
     }
 
     if (sshCode) {
@@ -404,7 +406,7 @@ function renderTailscale(ts) {
     }
   } else {
     if (badgeText) badgeText.textContent = "Local";
-    if (connBadge) connBadge.textContent = "Binding to 0.0.0.0";
+    if (connBadge) connBadge.textContent = "Binding to 127.0.0.1:8765";
   }
 }
 
@@ -437,7 +439,7 @@ function loadTerminalIframe() {
   const viewport = document.querySelector(".drawer-viewport");
   if (!viewport || isTerminalLoaded) return;
 
-  viewport.innerHTML = `<iframe id="terminal-iframe" src="/terminal/" frameborder="0" allowfullscreen></iframe>`;
+  viewport.innerHTML = `<iframe id="terminal-iframe" src="${BASE_PATH}/terminal/" frameborder="0" allowfullscreen></iframe>`;
   isTerminalLoaded = true;
 }
 

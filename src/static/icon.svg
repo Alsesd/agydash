@@ -1,0 +1,56 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="100%" height="100%">
+  <defs>
+    <!-- Background Gradient -->
+    <radialGradient id="bgGrad" cx="50%" cy="30%" r="80%">
+      <stop offset="0%" stop-color="#181b2a"/>
+      <stop offset="60%" stop-color="#0e1017"/>
+      <stop offset="100%" stop-color="#07080b"/>
+    </radialGradient>
+
+    <!-- Core Glow & Accents -->
+    <linearGradient id="neonGlow" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#00f2fe"/>
+      <stop offset="100%" stop-color="#4facfe"/>
+    </linearGradient>
+
+    <linearGradient id="accentPurple" x1="0%" y1="100%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#7f00ff"/>
+      <stop offset="100%" stop-color="#e100ff"/>
+    </linearGradient>
+
+    <!-- Drop Shadow Filter -->
+    <filter id="glowFilter" x="-20%" y="-20%" width="140%" height="140%">
+      <feGaussianBlur stdDeviation="12" result="blur"/>
+      <feComposite in="SourceGraphic" in2="blur" operator="over"/>
+    </filter>
+  </defs>
+
+  <!-- Base Rounded Container -->
+  <rect width="512" height="512" rx="112" fill="url(#bgGrad)"/>
+  <rect width="504" height="504" x="4" y="4" rx="108" fill="none" stroke="url(#neonGlow)" stroke-width="2.5" stroke-opacity="0.3"/>
+
+  <!-- Orbital Gravity Rings -->
+  <g transform="translate(256, 360)">
+    <!-- Lower Curved Horizon -->
+    <ellipse cx="0" cy="0" rx="160" ry="42" fill="none" stroke="url(#accentPurple)" stroke-width="6" stroke-dasharray="16 10" opacity="0.6"/>
+    <ellipse cx="0" cy="0" rx="110" ry="28" fill="none" stroke="url(#neonGlow)" stroke-width="4" opacity="0.85"/>
+  </g>
+
+  <!-- Antigravity Levitating Chevron / Arrow -->
+  <g filter="url(#glowFilter)">
+    <!-- Outer Core -->
+    <path d="M 256 108 
+             L 372 278 
+             L 320 278 
+             L 256 186 
+             L 192 278 
+             L 140 278 Z" 
+          fill="url(#neonGlow)"/>
+
+    <!-- Inverted Stabilizer Fin -->
+    <polygon points="256,230 292,298 220,298" fill="url(#accentPurple)" opacity="0.9"/>
+
+    <!-- Center Pulse Singularity -->
+    <circle cx="256" cy="360" r="9" fill="#00f2fe"/>
+  </g>
+</svg>

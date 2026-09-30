@@ -83,7 +83,6 @@ class TailscaleHelper:
                 urls = []
                 if dns_name:
                     urls.append(f"https://{dns_name}")
-                urls.append("https://agydash")
                 urls.append(f"https://{info['hostname']}")
                 if info["ip"]:
                     urls.append(f"https://{info['ip']}")
@@ -636,11 +635,19 @@ class DashboardHandler(BaseHTTPRequestHandler):
         # Keep journalctl clean
         pass
 
-    def do_HEAD(self):
+    def _normalize_path(self):
         url_path = self.path.split("?")[0]
-        if url_path in ("/", "/index.html"):
+        if url_path in ("/agydash", "/agydash/"):
+            return "/"
+        if url_path.startswith("/agydash/"):
+            return url_path[len("/agydash"):]
+        return url_path
+
+    def do_HEAD(self):
+        url_path = self._normalize_path()
+        if url_path in ("/", "/index.html", "/favicon.svg", "/icon.svg"):
             self.send_response(200)
-            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Type", "text/html; charset=utf-8" if "html" in url_path or url_path == "/" else "image/svg+xml")
             self.send_header("Cache-Control", "no-cache")
             self.end_headers()
         elif url_path.startswith("/api/"):
@@ -653,10 +660,12 @@ class DashboardHandler(BaseHTTPRequestHandler):
             self.end_headers()
 
     def do_GET(self):
-        url_path = self.path.split("?")[0]
+        url_path = self._normalize_path()
 
         if url_path in ("/", "/index.html"):
             self._serve_static_file("index.html", "text/html; charset=utf-8")
+        elif url_path in ("/favicon.svg", "/icon.svg"):
+            self._serve_static_file("favicon.svg", "image/svg+xml")
         elif url_path.startswith("/static/"):
             rel = url_path[len("/static/"):]
             self._serve_static_file(rel)
@@ -676,7 +685,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
             self.send_error(404, "Not Found")
 
     def do_POST(self):
-        url_path = self.path.split("?")[0]
+        url_path = self._normalize_path()
         if url_path == "/api/answer":
             content_length = int(self.headers.get("Content-Length", 0))
             body = self.rfile.read(content_length)
@@ -789,7 +798,10 @@ class DashboardHandler(BaseHTTPRequestHandler):
             self.send_error(502, f"Terminal backend unavailable: {e}")
             return
 
-        req_line = f"{self.command} {self.path} HTTP/1.1\r\n"
+        ttyd_path = self.path
+        if ttyd_path.startswith("/agydash"):
+            ttyd_path = ttyd_path[len("/agydash"):]
+        req_line = f"{self.command} {ttyd_path} HTTP/1.1\r\n"
         headers_str = req_line
         for h, v in self.headers.items():
             if h.lower() == "host":
@@ -869,7 +881,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 target_sock.close()
 
 
-def run_dashboard(host="0.0.0.0", port=9090):
+def run_dashboard(host="127.0.0.1", port=8765):
     monitor = AntigravityMonitor()
     terminal_mgr = TerminalManager(port=TTYD_PORT, session=TMUX_SESSION_NAME)
     terminal_mgr.start()
@@ -889,8 +901,7 @@ def run_dashboard(host="0.0.0.0", port=9090):
     if ts["available"] and ts["ip"]:
         print(f" • Tailscale IP:      http://{ts['ip']}:{port}")
         if ts.get("magic_dns"):
-            print(f" • Tailscale DNS:     https://{ts['magic_dns']}")
-            print(f" • HTTPS Short:       https://agydash")
+            print(f" • Tailscale DNS:     https://{ts['magic_dns']}/agydash")
     print(f" • SSH Tmux Session:  tmux attach -t {TMUX_SESSION_NAME}")
     print("=" * 65)
 
@@ -909,8 +920,8 @@ def run_dashboard(host="0.0.0.0", port=9090):
 if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser(description="Antigravity Web Dashboard")
-    parser.add_argument("--host", default=os.environ.get("HOST", "0.0.0.0"), help="Host to bind (default: 0.0.0.0)")
-    parser.add_argument("--port", type=int, default=int(os.environ.get("PORT", "9090")), help="Port to listen (default: 9090)")
+    parser.add_argument("--host", default=os.environ.get("HOST", "127.0.0.1"), help="Host to bind (default: 127.0.0.1)")
+    parser.add_argument("--port", type=int, default=int(os.environ.get("PORT", "8765")), help="Port to listen (default: 8765)")
     args = parser.parse_args()
 
     run_dashboard(host=args.host, port=args.port)

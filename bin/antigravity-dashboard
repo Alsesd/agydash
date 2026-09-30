@@ -3,8 +3,8 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
-PORT="${PORT:-9090}"
-HOST="${HOST:-0.0.0.0}"
+PORT="${PORT:-8765}"
+HOST="${HOST:-127.0.0.1}"
 
 SERVICE_NAME="antigravity-dashboard.service"
 USER_SYSTEMD_DIR="${HOME}/.config/systemd/user"
@@ -28,8 +28,8 @@ Commands:
   help                                Show this help message
 
 Options:
-  --port PORT                         Port to listen on (default: 9090)
-  --host HOST                         Host interface to bind (default: 0.0.0.0)
+  --port PORT                         Port to listen on (default: 8765)
+  --host HOST                         Host interface to bind (default: 127.0.0.1)
 EOF
 }
 
@@ -175,7 +175,6 @@ cmd_tailscale() {
   echo " • Localhost HTTPS:  https://localhost"
   if [[ -n "$ts_ip" ]]; then
     echo " • Tailscale DNS:    https://$dns_name"
-    echo " • Short Domain:     https://agydash"
     echo " • Tailscale IP:     https://$ts_ip"
     echo " • Direct Port 9090: http://$ts_ip:$PORT"
     echo " • Root CA Cert:     http://$ts_ip/root.crt"
