@@ -1,14 +1,29 @@
-// Antigravity Hub - Single Page Application
+// Antigravity Hub - PWA Single Page Application
 
 let currentConvId = null;
-let currentTailscaleIp = null;
 let currentQuestionStep = null;
 let sseSource = null;
-let isTerminalLoaded = false;
 let fallbackPollInterval = null;
+let lastLimitsData = null;
+let lastTaskData = null;
+
+const BASE_PATH = window.location.pathname.startsWith("/agydash") ? "/agydash" : "";
+
+// Register Service Worker for PWA compliance and offline support
+if ('serviceWorker' in navigator) {
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register('/agydash/sw.js', { scope: '/agydash/' })
+      .then(reg => {
+        console.log('PWA ServiceWorker registered with scope:', reg.scope);
+      })
+      .catch(err => {
+        console.warn('PWA ServiceWorker registration failed:', err);
+      });
+  });
+}
 
 document.addEventListener("DOMContentLoaded", () => {
-  setupTerminalDrawer();
+  setupMobileKeypad();
   initDataFeed();
 
   const refreshBtn = document.getElementById("btn-refresh");
@@ -19,8 +34,6 @@ document.addEventListener("DOMContentLoaded", () => {
     });
   }
 });
-
-const BASE_PATH = window.location.pathname.startsWith("/agydash") ? "/agydash" : "";
 
 // SSE Stream with Polling Fallback
 function initDataFeed() {
@@ -44,7 +57,6 @@ function initDataFeed() {
       };
 
       sseSource.onerror = () => {
-        // SSE disconnected, fallback to polling
         startFallbackPolling();
       };
     } catch (e) {
@@ -62,15 +74,13 @@ function startFallbackPolling() {
 
 async function fetchData() {
   try {
-    const [limitsRes, statusRes, tsRes] = await Promise.all([
+    const [limitsRes, statusRes] = await Promise.all([
       fetch(`${BASE_PATH}/api/limits`).then(r => r.json()).catch(() => null),
-      fetch(`${BASE_PATH}/api/status`).then(r => r.json()).catch(() => null),
-      fetch(`${BASE_PATH}/api/tailscale`).then(r => r.json()).catch(() => null)
+      fetch(`${BASE_PATH}/api/status`).then(r => r.json()).catch(() => null)
     ]);
 
     if (limitsRes) renderLimits(limitsRes);
     if (statusRes) renderTask(statusRes);
-    if (tsRes) renderTailscale(tsRes);
   } catch (err) {
     console.error("Error fetching dashboard data:", err);
   }
@@ -79,6 +89,7 @@ async function fetchData() {
 // Render Quota & Limits
 function renderLimits(data) {
   if (!data || !data.groups) return;
+  lastLimitsData = data;
 
   const syncStatus = document.getElementById("quota-sync-status");
   if (syncStatus) {
@@ -120,6 +131,8 @@ function renderLimits(data) {
       });
     }
   });
+
+  renderTokens(lastTaskData, data);
 }
 
 function setMeter(idPrefix, pct, resetText, isPurple = false) {
@@ -141,6 +154,38 @@ function setMeter(idPrefix, pct, resetText, isPurple = false) {
   }
   if (resetEl && resetText) {
     resetEl.textContent = `Resets: ${resetText}`;
+  }
+}
+
+function renderTokens(task, limits) {
+  const sessionVal = document.getElementById("session-tokens-val");
+  const sessionBar = document.getElementById("session-tokens-bar");
+  const sessionSub = document.getElementById("session-tokens-sub");
+  const ctxVal = document.getElementById("context-tokens-val");
+  const ctxBar = document.getElementById("context-tokens-bar");
+
+  let estTokens = 0;
+  if (task && task.token_usage) {
+    estTokens = task.token_usage.total_tokens || task.token_usage.total || 0;
+  } else if (task && task.steps_count) {
+    estTokens = task.steps_count * 1250;
+  }
+
+  if (sessionVal) {
+    sessionVal.textContent = estTokens >= 1000 ? `${(estTokens / 1000).toFixed(1)}k` : `${estTokens}`;
+  }
+  if (sessionBar) {
+    const pct = Math.min(100, Math.round((estTokens / 200000) * 100));
+    sessionBar.style.width = `${pct}%`;
+  }
+  if (sessionSub) {
+    sessionSub.textContent = estTokens > 0 ? `~${estTokens.toLocaleString()} tokens in session` : "No session tokens yet";
+  }
+
+  if (ctxVal) {
+    const ctxLoad = Math.min(100, Math.round((estTokens / 1000000) * 100));
+    ctxVal.textContent = `${ctxLoad}%`;
+    if (ctxBar) ctxBar.style.width = `${ctxLoad}%`;
   }
 }
 
@@ -168,19 +213,21 @@ function formatResetTime(isoStr) {
 // Render Active Task
 function renderTask(task) {
   if (!task) return;
+  lastTaskData = task;
 
   currentConvId = task.conversation_id;
 
   // Header status & model
   const statusChip = document.getElementById("agent-status-chip");
   const statusText = document.getElementById("agent-status-text");
+  const statusTag = document.getElementById("task-status-tag");
   const modelText = document.getElementById("active-model-name");
 
   if (modelText && task.model) {
     modelText.textContent = task.model;
   }
 
-  const isRunning = task.status === "CASCADE_RUN_STATUS_RUNNING" || task.not_fully_idle;
+  const isRunning = task.active && (task.status === "CASCADE_RUN_STATUS_RUNNING" || task.not_fully_idle);
   if (statusChip && statusText) {
     statusChip.className = "status-chip " + (isRunning ? "running" : "idle");
     if (isRunning) {
@@ -194,6 +241,11 @@ function renderTask(task) {
     }
   }
 
+  if (statusTag) {
+    statusTag.className = "tag-status " + (isRunning ? "active" : "");
+    statusTag.textContent = isRunning ? "ACTIVE" : "IDLE";
+  }
+
   // Conversation Info
   const titleEl = document.getElementById("task-title");
   if (titleEl) titleEl.textContent = task.title || "Antigravity Session";
@@ -203,9 +255,18 @@ function renderTask(task) {
     convIdShort.textContent = `ID: ${currentConvId.slice(0, 8)}...`;
   }
 
+  // Prominently displayed user prompt
+  // When task is not running or prompt is empty, ensure prompt text area is cleared or displays "No active session prompt" (clean state).
   const promptEl = document.getElementById("task-prompt-content");
   if (promptEl) {
-    promptEl.textContent = task.user_request || "No active prompt";
+    const hasPrompt = Boolean(task.user_request && task.user_request.trim());
+    if (isRunning && hasPrompt) {
+      promptEl.textContent = task.user_request.trim();
+      promptEl.classList.remove("prompt-idle");
+    } else {
+      promptEl.textContent = "No active session prompt";
+      promptEl.classList.add("prompt-idle");
+    }
   }
 
   const stepsEl = document.getElementById("task-steps-count");
@@ -233,6 +294,9 @@ function renderTask(task) {
 
   // Timeline
   renderTimeline(task.recent_steps);
+
+  // Token usage meters
+  renderTokens(task, lastLimitsData);
 }
 
 // Interactive Question Answering
@@ -345,7 +409,6 @@ function renderTimeline(steps) {
   if (countBadge) countBadge.textContent = `${steps.length} steps`;
 
   let html = "";
-  // Show most recent at top
   const reversed = [...steps].reverse();
 
   reversed.forEach(s => {
@@ -373,111 +436,58 @@ function renderTimeline(steps) {
   container.innerHTML = html;
 }
 
-// Render Tailscale Info
-function renderTailscale(ts) {
-  if (!ts) return;
+// Mobile Virtual Keypad Bar Setup & sendKey
+function setupMobileKeypad() {
+  const keypad = document.getElementById("mobile-keypad-bar");
+  if (!keypad) return;
 
-  const badgeText = document.getElementById("ts-badge-text");
-  const connBadge = document.getElementById("ts-connection-badge");
-  const textIp = document.getElementById("text-ts-ip");
-  const dnsLink = document.getElementById("link-ts-dns");
-  const portLink = document.getElementById("link-direct-port");
-  const sshCode = document.getElementById("ssh-command-code");
+  const buttons = keypad.querySelectorAll(".vkey-btn");
+  buttons.forEach(btn => {
+    btn.addEventListener("click", (e) => {
+      e.preventDefault();
+      const keyName = btn.getAttribute("data-key");
+      if (keyName) {
+        sendKey(keyName);
+      }
+    });
+  });
+}
 
-  if (ts.available && ts.ip) {
-    currentTailscaleIp = ts.ip;
-    if (badgeText) badgeText.textContent = ts.hostname || "nixos";
-    if (connBadge) connBadge.textContent = "Tailscale Connected";
-    if (textIp) textIp.textContent = ts.ip;
+async function sendKey(keyName) {
+  // Trigger haptic vibration
+  if (navigator.vibrate) {
+    try { navigator.vibrate(12); } catch (e) {}
+  }
 
-    const dnsHost = ts.magic_dns || `${ts.hostname}.tail42f05a.ts.net`;
-    if (dnsLink) {
-      dnsLink.textContent = `https://${dnsHost}/agydash`;
-      dnsLink.href = `https://${dnsHost}/agydash`;
+  // Visual active highlight
+  const btn = document.querySelector(`.vkey-btn[data-key="${keyName}"]`);
+  if (btn) {
+    btn.classList.add("active-press");
+    setTimeout(() => btn.classList.remove("active-press"), 150);
+  }
+
+  try {
+    const res = await fetch(`${BASE_PATH}/api/key`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ key: keyName })
+    });
+
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      showToast(data.error ? `Key error: ${data.error}` : `Failed to send ${keyName}`);
     }
-
-    if (portLink) {
-      portLink.textContent = `http://127.0.0.1:8765`;
-      portLink.href = `http://127.0.0.1:8765`;
-    }
-
-    if (sshCode) {
-      sshCode.textContent = `ssh alsesd@${ts.ip} -t "tmux new -A -s agy"`;
-    }
-  } else {
-    if (badgeText) badgeText.textContent = "Local";
-    if (connBadge) connBadge.textContent = "Binding to 127.0.0.1:8765";
+  } catch (err) {
+    showToast(`Key send error: ${err.message || err}`);
   }
 }
 
-// Terminal Drawer Controls
-function setupTerminalDrawer() {
-  const drawer = document.getElementById("terminal-drawer");
-  const backdrop = document.getElementById("terminal-backdrop");
-  const openBtn = document.getElementById("btn-open-terminal");
-  const closeBtn = document.getElementById("btn-close-terminal");
-  const placeholder = document.getElementById("terminal-placeholder");
-
-  function openDrawer() {
-    drawer.classList.add("open");
-    backdrop.classList.add("open");
-    loadTerminalIframe();
-  }
-
-  function closeDrawer() {
-    drawer.classList.remove("open");
-    backdrop.classList.remove("open");
-  }
-
-  if (openBtn) openBtn.addEventListener("click", openDrawer);
-  if (closeBtn) closeBtn.addEventListener("click", closeDrawer);
-  if (backdrop) backdrop.addEventListener("click", closeDrawer);
-  if (placeholder) placeholder.addEventListener("click", loadTerminalIframe);
-}
-
-function loadTerminalIframe() {
-  const viewport = document.querySelector(".drawer-viewport");
-  if (!viewport || isTerminalLoaded) return;
-
-  viewport.innerHTML = `<iframe id="terminal-iframe" src="${BASE_PATH}/terminal/" frameborder="0" allowfullscreen></iframe>`;
-  isTerminalLoaded = true;
-}
-
+// Terminal Reconnect Helper
 function reloadTerminal() {
   const iframe = document.getElementById("terminal-iframe");
   if (iframe) {
     iframe.src = iframe.src;
-    showToast("Terminal reloaded");
-  } else {
-    loadTerminalIframe();
-  }
-}
-
-function sendKey(key) {
-  const iframe = document.getElementById("terminal-iframe");
-  if (!iframe) return;
-
-  // Sends simulated key event to terminal iframe if reachable
-  try {
-    const doc = iframe.contentDocument || iframe.contentWindow.document;
-    const canvas = doc.querySelector(".xterm-helper-textarea") || doc.querySelector("textarea") || doc.body;
-    let char = "";
-    if (key === "Enter") char = "\r";
-    else if (key === "Tab") char = "\t";
-    else if (key === "Escape") char = "\x1b";
-    else if (key === "CtrlC") char = "\x03";
-    else if (key === "Up") char = "\x1b[A";
-    else if (key === "Down") char = "\x1b[B";
-    else if (key === "Clear") char = "\x0c";
-
-    if (canvas && char) {
-      canvas.focus();
-      canvas.value = char;
-      const evt = new CustomEvent("input", { bubbles: true });
-      canvas.dispatchEvent(evt);
-    }
-  } catch (e) {
-    // Cross-origin restriction fallback
+    showToast("Terminal session reloaded");
   }
 }
 
@@ -486,14 +496,6 @@ function copyConversationId() {
   if (!currentConvId) return;
   navigator.clipboard.writeText(currentConvId).then(() => {
     showToast("Copied conversation ID");
-  });
-}
-
-function copySSHCommand() {
-  const code = document.getElementById("ssh-command-code")?.textContent;
-  if (!code) return;
-  navigator.clipboard.writeText(code).then(() => {
-    showToast("Copied SSH command");
   });
 }
 

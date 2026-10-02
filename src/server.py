@@ -45,67 +45,17 @@ TMUX_SESSION_NAME = "agy"
 class TailscaleHelper:
     @staticmethod
     def get_info():
-        info = {
+        return {
             "available": False,
             "ip": None,
-            "hostname": None,
+            "hostname": socket.gethostname(),
             "dns_name": None,
             "magic_dns": None,
-            "status": "offline",
+            "status": "disabled",
             "peers": [],
             "urls": []
         }
-        try:
-            cmd = shutil.which("tailscale") or "/run/current-system/sw/bin/tailscale"
-            if not os.path.exists(cmd):
-                return info
 
-            # Get IP
-            res = subprocess.run([cmd, "ip", "-4"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=2)
-            if res.returncode == 0 and res.stdout.strip():
-                info["ip"] = res.stdout.strip().split("\n")[0]
-                info["available"] = True
-                info["status"] = "connected"
-
-            # Get Status JSON
-            res2 = subprocess.run([cmd, "status", "--json"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=2)
-            if res2.returncode == 0 and res2.stdout.strip():
-                data = json.loads(res2.stdout)
-                self_node = data.get("Self", {})
-                info["hostname"] = self_node.get("HostName", socket.gethostname())
-                info["tailscale_ips"] = self_node.get("TailscaleIPs", [])
-                dns_name = self_node.get("DNSName", "").rstrip(".")
-                info["dns_name"] = dns_name
-                if dns_name:
-                    info["magic_dns"] = dns_name
-
-                # Construct accessible URLs
-                urls = []
-                if dns_name:
-                    urls.append(f"https://{dns_name}")
-                urls.append(f"https://{info['hostname']}")
-                if info["ip"]:
-                    urls.append(f"https://{info['ip']}")
-                    urls.append(f"http://{info['ip']}:9090")
-                info["urls"] = urls
-
-                # List peers on tailnet
-                peers = []
-                for p in data.get("Peer", {}).values():
-                    peers.append({
-                        "hostname": p.get("HostName", ""),
-                        "dns_name": p.get("DNSName", "").rstrip("."),
-                        "ip": p.get("TailscaleIPs", [""])[0] if p.get("TailscaleIPs") else "",
-                        "os": p.get("OS", ""),
-                        "online": p.get("Online", False)
-                    })
-                info["peers"] = peers
-        except Exception:
-            pass
-
-        if not info["hostname"]:
-            info["hostname"] = socket.gethostname()
-        return info
 
 
 class AntigravityMonitor:
@@ -266,10 +216,83 @@ class AntigravityMonitor:
         except Exception:
             return iso_str
 
+    def _compute_tokens_from_steps(self, steps):
+        input_chars = 0
+        output_chars = 0
+        explicit_input = 0
+        explicit_output = 0
+        has_explicit = False
+        for st in steps:
+            tok_u = st.get("token_usage") or st.get("usage") or {}
+            if tok_u and isinstance(tok_u, dict):
+                has_explicit = True
+                explicit_input += tok_u.get("input_tokens", 0) or tok_u.get("prompt_tokens", 0)
+                explicit_output += tok_u.get("output_tokens", 0) or tok_u.get("completion_tokens", 0)
+
+            content = st.get("content") or ""
+            thinking = st.get("thinking") or ""
+            source = st.get("source")
+            if source == "MODEL":
+                output_chars += len(content) + len(thinking)
+                for tc in st.get("tool_calls", []):
+                    output_chars += len(json.dumps(tc.get("args", {})))
+            else:
+                input_chars += len(content)
+
+        if has_explicit and (explicit_input + explicit_output > 0):
+            inp = explicit_input
+            out = explicit_output
+        else:
+            inp = max(0, input_chars // 4)
+            out = max(0, output_chars // 4)
+        tot = inp + out
+        return {
+            "total_tokens": tot,
+            "session_total_tokens": tot,
+            "input_tokens": inp,
+            "output_tokens": out,
+            "step_count": len(steps)
+        }
+
+    def compute_session_token_usage(self, conv_id=None):
+        if not conv_id:
+            conv_id = self.get_active_conversation_id()
+        default_usage = {
+            "total_tokens": 0,
+            "session_total_tokens": 0,
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "step_count": 0
+        }
+        if not conv_id:
+            return default_usage
+
+        transcript_file = BRAIN_DIR / conv_id / ".system_generated" / "logs" / "transcript.jsonl"
+        if not transcript_file.exists():
+            return default_usage
+
+        steps = []
+        try:
+            with open(transcript_file, "r", errors="ignore") as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        steps.append(json.loads(line))
+                    except Exception:
+                        pass
+            return self._compute_tokens_from_steps(steps)
+        except Exception:
+            return default_usage
+
     def get_limits_and_usage(self):
         now = time.time()
+        tok_usage = self.compute_session_token_usage()
         if self.last_quota_data and (now - self.last_quota_time < 4):
-            return self.last_quota_data
+            res = dict(self.last_quota_data)
+            res["token_usage"] = tok_usage
+            return res
 
         # Try live query
         self.discover_credentials()
@@ -298,7 +321,8 @@ class AntigravityMonitor:
                             "timestamp": now,
                             "groups": groups,
                             "description": quota_resp.get("description", ""),
-                            "ls_address": self.ls_address
+                            "ls_address": self.ls_address,
+                            "token_usage": tok_usage
                         }
                         self.last_quota_data = data
                         self.last_quota_time = now
@@ -311,6 +335,7 @@ class AntigravityMonitor:
         if self.cached_quota:
             cached = dict(self.cached_quota)
             cached["status"] = "cached"
+            cached["token_usage"] = tok_usage
             return cached
 
         # Fallback template
@@ -335,7 +360,8 @@ class AntigravityMonitor:
                     ]
                 }
             ],
-            "description": "Quota pools for Antigravity models."
+            "description": "Quota pools for Antigravity models.",
+            "token_usage": tok_usage
         }
 
     def get_recent_conversations(self, limit=10):
@@ -452,7 +478,14 @@ class AntigravityMonitor:
             "recent_steps": [],
             "pending_question": None,
             "notifications": [],
-            "current_action": None
+            "current_action": None,
+            "token_usage": {
+                "total_tokens": 0,
+                "session_total_tokens": 0,
+                "input_tokens": 0,
+                "output_tokens": 0,
+                "step_count": 0
+            }
         }
 
         # Query summary
@@ -491,6 +524,8 @@ class AntigravityMonitor:
                             pass
                     
                     res["steps_count"] = len(steps)
+                    res["step_count"] = len(steps)
+                    res["token_usage"] = self._compute_tokens_from_steps(steps)
                     if steps:
                         # Extract first user request and detect model
                         for st in steps:
@@ -566,6 +601,16 @@ class AntigravityMonitor:
 
             except Exception as e:
                 res["error"] = str(e)
+
+        # Ensure token_usage is set
+        if not res.get("token_usage") or res["token_usage"].get("step_count", 0) == 0:
+            res["token_usage"] = self.compute_session_token_usage(conv_id)
+        res["step_count"] = res.get("steps_count", 0)
+
+        # Session end prompt cleaning:
+        # If the session is completed, idle, or not running:
+        if (not res.get("not_fully_idle", False)) and res.get("status") != "CASCADE_RUN_STATUS_RUNNING":
+            res["user_request"] = ""
 
         return res
 
@@ -645,14 +690,34 @@ class DashboardHandler(BaseHTTPRequestHandler):
 
     def do_HEAD(self):
         url_path = self._normalize_path()
-        if url_path in ("/", "/index.html", "/favicon.svg", "/icon.svg"):
+        if url_path in ("/", "/index.html"):
             self.send_response(200)
-            self.send_header("Content-Type", "text/html; charset=utf-8" if "html" in url_path or url_path == "/" else "image/svg+xml")
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Cache-Control", "no-cache")
+            self.end_headers()
+        elif url_path.endswith(".webmanifest"):
+            self.send_response(200)
+            self.send_header("Content-Type", "application/manifest+json; charset=utf-8")
+            self.send_header("Cache-Control", "no-cache")
+            self.end_headers()
+        elif url_path.endswith(".js"):
+            self.send_response(200)
+            self.send_header("Content-Type", "application/javascript; charset=utf-8")
+            self.send_header("Cache-Control", "no-cache")
+            self.end_headers()
+        elif url_path.endswith(".svg"):
+            self.send_response(200)
+            self.send_header("Content-Type", "image/svg+xml")
+            self.send_header("Cache-Control", "no-cache")
+            self.end_headers()
+        elif url_path.endswith(".png"):
+            self.send_response(200)
+            self.send_header("Content-Type", "image/png")
             self.send_header("Cache-Control", "no-cache")
             self.end_headers()
         elif url_path.startswith("/api/"):
             self.send_response(200)
-            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Type", "application/json; charset=utf-8")
             self.send_header("Cache-Control", "no-cache")
             self.end_headers()
         else:
@@ -664,11 +729,17 @@ class DashboardHandler(BaseHTTPRequestHandler):
 
         if url_path in ("/", "/index.html"):
             self._serve_static_file("index.html", "text/html; charset=utf-8")
+        elif url_path in ("/manifest.webmanifest", "/static/manifest.webmanifest"):
+            self._serve_static_file("manifest.webmanifest", "application/manifest+json; charset=utf-8")
+        elif url_path in ("/sw.js", "/static/sw.js"):
+            self._serve_static_file("sw.js", "application/javascript; charset=utf-8")
         elif url_path in ("/favicon.svg", "/icon.svg"):
-            self._serve_static_file("favicon.svg", "image/svg+xml")
+            self._serve_static_file("favicon.svg" if "favicon" in url_path else "icon.svg", "image/svg+xml")
         elif url_path.startswith("/static/"):
             rel = url_path[len("/static/"):]
             self._serve_static_file(rel)
+        elif (STATIC_DIR / url_path.lstrip("/")).is_file():
+            self._serve_static_file(url_path.lstrip("/"))
         elif url_path == "/api/status":
             self._send_json(self.monitor.get_task_details())
         elif url_path == "/api/limits":
@@ -686,7 +757,73 @@ class DashboardHandler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         url_path = self._normalize_path()
-        if url_path == "/api/answer":
+        if url_path in ("/api/key", "/agydash/api/key"):
+            content_length = int(self.headers.get("Content-Length", 0))
+            body = self.rfile.read(content_length)
+            try:
+                data = json.loads(body.decode("utf-8")) if body else {}
+                key = data.get("key", "").strip()
+                if not key:
+                    self._send_json({"success": False, "error": "Missing key parameter"}, status=400)
+                    return
+
+                key_map = {
+                    "Shift+Tab": "BTab",
+                    "ShiftTab": "BTab",
+                    "BTab": "BTab",
+                    "Esc": "Escape",
+                    "Escape": "Escape",
+                    "Up": "Up",
+                    "Down": "Down",
+                    "Left": "Left",
+                    "Right": "Right",
+                    "Enter": "Enter",
+                    "CtrlC": "C-c",
+                    "Ctrl-C": "C-c",
+                    "Space": "Space",
+                }
+                mapped_key = key_map.get(key, key)
+
+                # Locate tmux binary
+                tmux_candidates = [
+                    "/nix/store/kycygkx3pwxq004y26svfhw2p12yj4rb-tmux-3.7c/bin/tmux",
+                    "/run/current-system/sw/bin/tmux",
+                ]
+                tmux_bin = None
+                for candidate in tmux_candidates:
+                    if os.path.exists(candidate):
+                        tmux_bin = candidate
+                        break
+                if not tmux_bin:
+                    tmux_bin = shutil.which("tmux")
+                if not tmux_bin:
+                    for p in Path("/nix/store").glob("*-tmux-*/bin/tmux"):
+                        if p.is_file() and os.access(p, os.X_OK):
+                            tmux_bin = str(p)
+                            break
+                if not tmux_bin:
+                    tmux_bin = "tmux"
+
+                res = subprocess.run(
+                    [tmux_bin, "send-keys", "-t", "agy", mapped_key],
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                    timeout=5
+                )
+                if res.returncode == 0:
+                    self._send_json({"success": True, "key": key, "mapped": mapped_key})
+                else:
+                    self._send_json({
+                        "success": False,
+                        "key": key,
+                        "mapped": mapped_key,
+                        "error": res.stderr.strip() or f"tmux returned code {res.returncode}"
+                    }, status=500)
+            except Exception as e:
+                self._send_json({"success": False, "error": str(e)}, status=500)
+
+        elif url_path in ("/api/answer", "/agydash/api/answer"):
             content_length = int(self.headers.get("Content-Length", 0))
             body = self.rfile.read(content_length)
             try:
@@ -738,6 +875,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 ".css": "text/css; charset=utf-8",
                 ".js": "application/javascript; charset=utf-8",
                 ".json": "application/json; charset=utf-8",
+                ".webmanifest": "application/manifest+json; charset=utf-8",
                 ".png": "image/png",
                 ".svg": "image/svg+xml",
                 ".ico": "image/x-icon"
@@ -893,15 +1031,10 @@ def run_dashboard(host="127.0.0.1", port=8765):
     server = ThreadingHTTPServer((host, port), DashboardHandler)
     server.daemon_threads = True
 
-    ts = TailscaleHelper.get_info()
-
     print("=" * 65)
     print(" 🚀 Antigravity Web Dashboard (Threading) is running!")
     print(f" • Local Address:     http://localhost:{port}")
-    if ts["available"] and ts["ip"]:
-        print(f" • Tailscale IP:      http://{ts['ip']}:{port}")
-        if ts.get("magic_dns"):
-            print(f" • Tailscale DNS:     https://{ts['magic_dns']}/agydash")
+    print(f" • Dashboard URL:     http://localhost:{port}/agydash/")
     print(f" • SSH Tmux Session:  tmux attach -t {TMUX_SESSION_NAME}")
     print("=" * 65)
 

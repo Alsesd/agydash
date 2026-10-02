@@ -3,9 +3,14 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
   <meta name="theme-color" content="#1d2021">
   <title>Antigravity Hub</title>
-  <link rel="icon" type="image/svg+xml" href="/agydash/favicon.svg" />
+  <link rel="manifest" href="/agydash/manifest.webmanifest">
+  <link rel="apple-touch-icon" href="/agydash/static/icon-192.png">
+  <link rel="icon" type="image/svg+xml" href="/agydash/static/icon.svg">
   <link rel="stylesheet" href="/agydash/static/style.css">
 </head>
 <body class="gruvbox-dark">
@@ -30,25 +35,12 @@
           <span id="active-model-name">Gemini 3.8 Flash</span>
         </div>
 
-        <div class="ts-badge" id="ts-badge" title="Tailscale Status">
-          <span class="ts-dot"></span>
-          <span id="ts-badge-text">Tailscale</span>
-        </div>
-
         <button class="btn-icon" id="btn-refresh" title="Refresh">
           <svg viewBox="0 0 24 24" width="16" height="16" stroke="currentColor" stroke-width="2" fill="none">
             <path d="M23 4v6h-6"></path>
             <path d="M1 20v-6h6"></path>
             <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path>
           </svg>
-        </button>
-
-        <button class="btn-terminal" id="btn-open-terminal" title="Open SSH Terminal">
-          <svg viewBox="0 0 24 24" width="15" height="15" stroke="currentColor" stroke-width="2" fill="none">
-            <polyline points="4 17 10 11 4 5"></polyline>
-            <line x1="12" y1="19" x2="20" y2="19"></line>
-          </svg>
-          <span>Terminal</span>
         </button>
       </div>
     </header>
@@ -80,10 +72,52 @@
         </div>
       </section>
 
+      <!-- Section: Current Prompt & Active Task -->
+      <section class="section-block">
+        <div class="section-header">
+          <h2 class="section-title">Current Prompt & Task</h2>
+          <div class="task-meta font-mono" id="task-steps-count">Steps: --</div>
+        </div>
+
+        <div class="card">
+          <div class="card-header">
+            <div class="session-info">
+              <span class="tag-status" id="task-status-tag">IDLE</span>
+              <span class="task-title font-bold" id="task-title">Antigravity Session</span>
+            </div>
+            <div class="chip-copy font-mono" id="copy-conv-btn" onclick="copyConversationId()" title="Copy Conversation ID">
+              <span id="conv-id-short">ID: --------</span>
+              <svg viewBox="0 0 24 24" width="12" height="12" stroke="currentColor" stroke-width="2" fill="none">
+                <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+                <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+              </svg>
+            </div>
+          </div>
+
+          <!-- Prominently displayed user prompt -->
+          <div class="task-prompt-box">
+            <div class="prompt-header">
+              <span class="label-xs text-muted">Current Prompt:</span>
+            </div>
+            <div class="prompt-text font-mono" id="task-prompt-content">No active session prompt</div>
+          </div>
+
+          <!-- Live Action Box -->
+          <div class="current-action-box" id="current-action-box">
+            <div class="action-top">
+              <span class="action-pulse"></span>
+              <span class="font-bold text-aqua" id="action-tool-badge">AGENT</span>
+              <span class="action-name" id="action-summary-text">Ready for instructions</span>
+            </div>
+            <pre class="action-args font-mono" id="action-args-preview">{}</pre>
+          </div>
+        </div>
+      </section>
+
       <!-- Section: Model Limits & Quota Pools -->
       <section class="section-block">
         <div class="section-header">
-          <h2 class="section-title">Model Quotas & Limits</h2>
+          <h2 class="section-title">Token Usage & Limit Pools</h2>
           <span class="status-indicator" id="quota-sync-status">Syncing...</span>
         </div>
 
@@ -155,45 +189,67 @@
               </div>
             </div>
           </div>
+
+          <!-- Estimated Tokens Card -->
+          <div class="card quota-card">
+            <div class="card-header">
+              <div class="title-with-icon">
+                <span class="dot-tokens"></span>
+                <span class="card-title font-bold">Session Tokens</span>
+              </div>
+              <span class="badge badge-orange">Usage</span>
+            </div>
+            <div class="meter-group">
+              <div class="meter-item">
+                <div class="meter-labels">
+                  <span class="meter-name">Estimated Tokens</span>
+                  <span class="meter-val font-mono" id="session-tokens-val">0</span>
+                </div>
+                <div class="meter-track">
+                  <div class="meter-bar fill-orange" id="session-tokens-bar" style="width: 0%;"></div>
+                </div>
+                <span class="meter-sub" id="session-tokens-sub">Cumulative tokens in session</span>
+              </div>
+
+              <div class="meter-item mt-2">
+                <div class="meter-labels">
+                  <span class="meter-name">Context Load</span>
+                  <span class="meter-val font-mono" id="context-tokens-val">--</span>
+                </div>
+                <div class="meter-track">
+                  <div class="meter-bar fill-aqua" id="context-tokens-bar" style="width: 0%;"></div>
+                </div>
+                <span class="meter-sub" id="context-tokens-sub">Window capacity</span>
+              </div>
+            </div>
+          </div>
         </div>
       </section>
 
-      <!-- Section: Active Task & Current Action -->
+      <!-- Section: Active Antigravity Session Terminal Interface -->
       <section class="section-block">
         <div class="section-header">
-          <h2 class="section-title">Active Antigravity Task</h2>
-          <div class="task-meta font-mono" id="task-steps-count">Steps: --</div>
+          <h2 class="section-title">Active Antigravity Session</h2>
+          <div class="terminal-header-actions">
+            <button class="btn-icon-sm" onclick="reloadTerminal()" title="Reconnect Session">↻ Reconnect</button>
+          </div>
         </div>
 
-        <!-- Task Overview Card -->
-        <div class="card">
-          <div class="card-header">
-            <div class="session-info">
-              <span class="tag-status" id="task-status-tag">ACTIVE</span>
-              <span class="task-title font-bold" id="task-title">Antigravity Session</span>
-            </div>
-            <div class="chip-copy font-mono" id="copy-conv-btn" onclick="copyConversationId()" title="Copy Conversation ID">
-              <span id="conv-id-short">ID: --------</span>
-              <svg viewBox="0 0 24 24" width="12" height="12" stroke="currentColor" stroke-width="2" fill="none">
-                <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
-                <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
-              </svg>
-            </div>
+        <div class="card terminal-card">
+          <!-- Mobile Virtual Keypad Bar -->
+          <div class="mobile-keypad-bar" id="mobile-keypad-bar" aria-label="Mobile Keypad Controls">
+            <button class="vkey-btn" id="key-shift-tab" data-key="Shift+Tab" title="Shift+Tab">Shift+Tab</button>
+            <button class="vkey-btn" id="key-esc" data-key="Esc" title="Escape">Esc</button>
+            <button class="vkey-btn" id="key-up" data-key="Up" title="Up Arrow">&uarr;</button>
+            <button class="vkey-btn" id="key-down" data-key="Down" title="Down Arrow">&darr;</button>
+            <button class="vkey-btn" id="key-left" data-key="Left" title="Left Arrow">&larr;</button>
+            <button class="vkey-btn" id="key-right" data-key="Right" title="Right Arrow">&rarr;</button>
+            <button class="vkey-btn vkey-accent" id="key-enter" data-key="Enter" title="Enter">Enter</button>
+            <button class="vkey-btn vkey-danger" id="key-ctrl-c" data-key="Ctrl-C" title="Ctrl+C">Ctrl-C</button>
           </div>
 
-          <div class="task-prompt-box">
-            <span class="label-xs text-muted">User Request:</span>
-            <div class="prompt-text font-mono" id="task-prompt-content">Loading prompt...</div>
-          </div>
-
-          <!-- Live Action Box -->
-          <div class="current-action-box" id="current-action-box">
-            <div class="action-top">
-              <span class="action-pulse"></span>
-              <span class="font-bold text-aqua" id="action-tool-badge">TOOL</span>
-              <span class="action-name" id="action-summary-text">Ready</span>
-            </div>
-            <pre class="action-args font-mono" id="action-args-preview">{}</pre>
+          <div class="session-terminal-container" id="session-terminal-container">
+            <iframe id="terminal-iframe" src="/agydash/terminal/" frameborder="0" allowfullscreen></iframe>
           </div>
         </div>
       </section>
@@ -202,7 +258,7 @@
       <section class="section-block">
         <div class="section-header">
           <h2 class="section-title">Recent Activity</h2>
-          <span class="text-xs text-muted" id="timeline-count-badge">Last 20 steps</span>
+          <span class="text-xs text-muted" id="timeline-count-badge">Last 25 steps</span>
         </div>
 
         <div class="card">
@@ -212,72 +268,7 @@
         </div>
       </section>
 
-      <!-- Section: Remote Access & Tailscale -->
-      <section class="section-block">
-        <div class="section-header">
-          <h2 class="section-title">Tailscale & Remote Access</h2>
-          <span class="badge badge-aqua" id="ts-connection-badge">Online</span>
-        </div>
-
-        <div class="card">
-          <div class="ts-links-grid">
-            <div class="link-item">
-              <span class="text-xs text-muted">Tailscale DNS:</span>
-              <a href="#" class="font-mono text-aqua" id="link-ts-dns" target="_blank">https://nixos.tail42f05a.ts.net</a>
-            </div>
-            <div class="link-item">
-              <span class="text-xs text-muted">Tailscale IP:</span>
-              <span class="font-mono" id="text-ts-ip">100.109.108.22</span>
-            </div>
-            <div class="link-item">
-              <span class="text-xs text-muted">Direct Port 9090:</span>
-              <a href="#" class="font-mono text-muted" id="link-direct-port" target="_blank">http://100.109.108.22:9090</a>
-            </div>
-          </div>
-
-          <!-- Quick SSH Command -->
-          <div class="ssh-bar mt-2">
-            <span class="text-muted font-mono">$</span>
-            <code class="font-mono" id="ssh-command-code">ssh alsesd@100.109.108.22 -t "tmux new -A -s agy"</code>
-            <button class="btn-copy-ssh" onclick="copySSHCommand()" title="Copy SSH command">Copy</button>
-          </div>
-        </div>
-      </section>
-
     </main>
-
-    <!-- Slide-over / Modal Terminal Drawer -->
-    <div class="terminal-drawer" id="terminal-drawer">
-      <div class="drawer-header">
-        <div class="drawer-title">
-          <span class="term-dot"></span>
-          <span class="font-mono font-bold">Web SSH Terminal (tmux: agy)</span>
-        </div>
-        <div class="drawer-actions">
-          <button class="btn-icon" onclick="reloadTerminal()" title="Reconnect">↻</button>
-          <button class="btn-close" id="btn-close-terminal" title="Close Terminal">✕</button>
-        </div>
-      </div>
-
-      <!-- Virtual keys for phone touch typing -->
-      <div class="mobile-keys-bar">
-        <button class="vkey" onclick="sendKey('Escape')">Esc</button>
-        <button class="vkey" onclick="sendKey('Tab')">Tab</button>
-        <button class="vkey" onclick="sendKey('CtrlC')">Ctrl-C</button>
-        <button class="vkey" onclick="sendKey('Enter')">Enter</button>
-        <button class="vkey" onclick="sendKey('Up')">↑</button>
-        <button class="vkey" onclick="sendKey('Down')">↓</button>
-        <button class="vkey" onclick="sendKey('Clear')">Clear</button>
-      </div>
-
-      <div class="drawer-viewport">
-        <!-- Iframe injected lazily on drawer open -->
-        <div class="iframe-placeholder" id="terminal-placeholder">
-          <span>Tap to launch persistent terminal session...</span>
-        </div>
-      </div>
-    </div>
-    <div class="drawer-backdrop" id="terminal-backdrop"></div>
 
     <!-- Toast Notification -->
     <div class="toast" id="toast"></div>

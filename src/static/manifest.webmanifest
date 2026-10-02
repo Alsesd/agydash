@@ -1,0 +1,31 @@
+{
+  "name": "Antigravity Dashboard",
+  "short_name": "AgyDash",
+  "id": "/agydash/",
+  "start_url": "/agydash/",
+  "scope": "/agydash/",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#1d2021",
+  "theme_color": "#1d2021",
+  "description": "Mobile Antigravity Session Dashboard & Controller",
+  "icons": [
+    {
+      "src": "/agydash/static/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "/agydash/static/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "/agydash/static/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml"
+    }
+  ]
+}
