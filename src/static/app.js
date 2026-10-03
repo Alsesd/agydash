@@ -1,4 +1,8 @@
-// Antigravity Hub - PWA Single Page Application
+/**
+ * Antigravity Hub - Dashboard Client Application
+ * Mobile-first PWA dashboard with virtual terminal keypad, live SSE,
+ * dynamic workdir widget, token metrics, and interactive question answering.
+ */
 
 let currentConvId = null;
 let currentQuestionStep = null;
@@ -9,7 +13,7 @@ let lastTaskData = null;
 
 const BASE_PATH = window.location.pathname.startsWith("/agydash") ? "/agydash" : "";
 
-// Register Service Worker for PWA compliance and offline support
+// 1. PWA Service Worker Registration with scope /agydash/
 if ('serviceWorker' in navigator) {
   window.addEventListener('load', () => {
     navigator.serviceWorker.register('/agydash/sw.js', { scope: '/agydash/' })
@@ -22,22 +26,74 @@ if ('serviceWorker' in navigator) {
   });
 }
 
+// Initialization on DOM Ready
 document.addEventListener("DOMContentLoaded", () => {
-  setupMobileKeypad();
+  setupTerminalControls();
   initDataFeed();
 
   const refreshBtn = document.getElementById("btn-refresh");
   if (refreshBtn) {
     refreshBtn.addEventListener("click", () => {
-      fetchData();
-      showToast("Refreshed");
+      fetchDashboardData();
+      showToast("Dashboard refreshed");
     });
   }
 });
 
-// SSE Stream with Polling Fallback
+// 2. Terminal Keypad Controls
+function setupTerminalControls() {
+  const keypad = document.getElementById("terminal-controls");
+  if (!keypad) return;
+
+  const buttons = keypad.querySelectorAll("button[data-key]");
+  buttons.forEach(btn => {
+    // Touchstart for rapid mobile responsiveness
+    btn.addEventListener("touchstart", (e) => {
+      triggerKeyFeedback(btn);
+    }, { passive: true });
+
+    btn.addEventListener("click", (e) => {
+      e.preventDefault();
+      const keyName = btn.getAttribute("data-key");
+      if (keyName) {
+        sendKeyCommand(keyName, btn);
+      }
+    });
+  });
+}
+
+function triggerKeyFeedback(btn) {
+  if (navigator.vibrate) {
+    try { navigator.vibrate(12); } catch (e) {}
+  }
+  if (btn) {
+    btn.classList.add("active-press");
+    setTimeout(() => btn.classList.remove("active-press"), 150);
+  }
+}
+
+async function sendKeyCommand(keyName, btn) {
+  triggerKeyFeedback(btn);
+
+  try {
+    const res = await fetch(`${BASE_PATH}/api/key`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ key: keyName })
+    });
+
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      showToast(data.error ? `Key error: ${data.error}` : `Failed to send ${keyName}`);
+    }
+  } catch (err) {
+    showToast(`Key error: ${err.message || err}`);
+  }
+}
+
+// 3. SSE Stream Connection with Polling Fallback
 function initDataFeed() {
-  fetchData(); // initial fetch immediately
+  fetchDashboardData();
 
   if (window.EventSource) {
     try {
@@ -57,22 +113,22 @@ function initDataFeed() {
       };
 
       sseSource.onerror = () => {
-        startFallbackPolling();
+        startPollingFallback();
       };
     } catch (e) {
-      startFallbackPolling();
+      startPollingFallback();
     }
   } else {
-    startFallbackPolling();
+    startPollingFallback();
   }
 }
 
-function startFallbackPolling() {
+function startPollingFallback() {
   if (fallbackPollInterval) return;
-  fallbackPollInterval = setInterval(fetchData, 3000);
+  fallbackPollInterval = setInterval(fetchDashboardData, 3000);
 }
 
-async function fetchData() {
+async function fetchDashboardData() {
   try {
     const [limitsRes, statusRes] = await Promise.all([
       fetch(`${BASE_PATH}/api/limits`).then(r => r.json()).catch(() => null),
@@ -86,7 +142,134 @@ async function fetchData() {
   }
 }
 
-// Render Quota & Limits
+// 4. Update #workdir-widget and Session Info dynamically
+function renderTask(task) {
+  if (!task) return;
+  lastTaskData = task;
+  currentConvId = task.conversation_id;
+
+  const isRunning = Boolean(task.active && (task.status === "CASCADE_RUN_STATUS_RUNNING" || task.not_fully_idle));
+
+  // Top Bar updates
+  const statusChip = document.getElementById("agent-status-chip");
+  const statusText = document.getElementById("agent-status-text");
+  const modelText = document.getElementById("active-model-name");
+
+  if (modelText && task.model) {
+    modelText.textContent = task.model;
+  }
+
+  if (statusChip && statusText) {
+    statusChip.className = "status-chip " + (isRunning ? "running" : "idle");
+    if (isRunning) {
+      if (task.current_action && task.current_action.tool) {
+        statusText.textContent = `Tool: ${task.current_action.tool}`;
+      } else {
+        statusText.textContent = "Running";
+      }
+    } else {
+      statusText.textContent = "Idle";
+    }
+  }
+
+  // #workdir-widget updates
+  const sessionStatusBadge = document.getElementById("session-status-badge");
+  if (sessionStatusBadge) {
+    sessionStatusBadge.textContent = isRunning ? "ACTIVE" : "IDLE";
+    sessionStatusBadge.className = "badge " + (isRunning ? "active" : "");
+  }
+
+  const taskTitle = document.getElementById("task-title");
+  if (taskTitle) {
+    taskTitle.textContent = task.title || "Antigravity Session";
+  }
+
+  const workdirEl = document.getElementById("workdir-path");
+  if (workdirEl) {
+    let resolvedWorkdir = task.workdir || task.cwd || task.workspace_path || task.working_dir;
+    if (!resolvedWorkdir && task.current_action && task.current_action.args && task.current_action.args.Cwd) {
+      resolvedWorkdir = task.current_action.args.Cwd;
+    }
+    if (!resolvedWorkdir) {
+      resolvedWorkdir = "/home/alsesd";
+    }
+    workdirEl.textContent = resolvedWorkdir;
+  }
+
+  const convIdEl = document.getElementById("conv-id-short");
+  if (convIdEl) {
+    convIdEl.textContent = currentConvId ? `ID: ${currentConvId.slice(0, 8)}...` : "ID: --------";
+  }
+
+  // Prompt and Current Action Box
+  const promptEl = document.getElementById("task-prompt-content");
+  if (promptEl) {
+    const hasPrompt = Boolean(task.user_request && task.user_request.trim());
+    if (isRunning && hasPrompt) {
+      promptEl.textContent = task.user_request.trim();
+      promptEl.classList.remove("prompt-idle");
+    } else {
+      promptEl.textContent = "No active session prompt";
+      promptEl.classList.add("prompt-idle");
+    }
+  }
+
+  const stepsEl = document.getElementById("task-steps-count");
+  if (stepsEl) {
+    stepsEl.textContent = `Steps: ${task.steps_count || task.step_count || 0}`;
+  }
+
+  const actionToolBadge = document.getElementById("action-tool-badge");
+  const actionSummary = document.getElementById("action-summary-text");
+  const actionArgs = document.getElementById("action-args-preview");
+
+  if (task.current_action && task.current_action.tool) {
+    if (actionToolBadge) actionToolBadge.textContent = task.current_action.tool;
+    if (actionSummary) actionSummary.textContent = task.current_action.action || task.current_action.summary || "Executing";
+    if (actionArgs) actionArgs.textContent = JSON.stringify(task.current_action.args || {}, null, 2);
+  } else {
+    if (actionToolBadge) actionToolBadge.textContent = isRunning ? "AGENT" : "IDLE";
+    if (actionSummary) actionSummary.textContent = isRunning ? "Thinking / Planning..." : "Awaiting next user instruction";
+    if (actionArgs) actionArgs.textContent = "Ready for instructions.";
+  }
+
+  // Update token counts in #token-usage-widget
+  renderTokens(task);
+
+  // Render question card if pending
+  renderQuestion(task.pending_question);
+}
+
+// 5. Update #token-usage-widget with active session tokens & quota progress
+function renderTokens(task) {
+  const inputEl = document.getElementById("tokens-input");
+  const outputEl = document.getElementById("tokens-output");
+  const totalEl = document.getElementById("tokens-total");
+  const stepsEl = document.getElementById("tokens-steps");
+
+  let inputTokens = 0;
+  let outputTokens = 0;
+  let totalTokens = 0;
+  let stepCount = 0;
+
+  if (task && task.token_usage) {
+    inputTokens = task.token_usage.input_tokens || 0;
+    outputTokens = task.token_usage.output_tokens || 0;
+    totalTokens = task.token_usage.total_tokens || task.token_usage.total || (inputTokens + outputTokens);
+    stepCount = task.token_usage.step_count || task.steps_count || 0;
+  } else if (task && task.steps_count) {
+    stepCount = task.steps_count;
+    totalTokens = stepCount * 1250;
+    inputTokens = Math.round(totalTokens * 0.7);
+    outputTokens = Math.round(totalTokens * 0.3);
+  }
+
+  if (inputEl) inputEl.textContent = formatNumber(inputTokens);
+  if (outputEl) outputEl.textContent = formatNumber(outputTokens);
+  if (totalEl) totalEl.textContent = formatNumber(totalTokens);
+  if (stepsEl) stepsEl.textContent = formatNumber(stepCount);
+}
+
 function renderLimits(data) {
   if (!data || !data.groups) return;
   lastLimitsData = data;
@@ -117,25 +300,26 @@ function renderLimits(data) {
 
         if (isGemini) {
           if (bucket.window === "weekly" || bucket.bucketId === "gemini-weekly") {
-            setMeter("gemini-weekly", pct, resetText);
+            setQuotaMeter("gemini-weekly", pct, resetText);
           } else if (bucket.window === "5h" || bucket.bucketId === "gemini-5h") {
-            setMeter("gemini-5h", pct, resetText);
+            setQuotaMeter("gemini-5h", pct, resetText);
           }
         } else if (is3p) {
+          // Updates both Claude and GPT pool meters
           if (bucket.window === "weekly" || bucket.bucketId === "3p-weekly") {
-            setMeter("3p-weekly", pct, resetText, true);
+            setQuotaMeter("claude-weekly", pct, resetText);
+            setQuotaMeter("gpt-weekly", pct, resetText);
           } else if (bucket.window === "5h" || bucket.bucketId === "3p-5h") {
-            setMeter("3p-5h", pct, resetText, true);
+            setQuotaMeter("claude-5h", pct, resetText);
+            setQuotaMeter("gpt-5h", pct, resetText);
           }
         }
       });
     }
   });
-
-  renderTokens(lastTaskData, data);
 }
 
-function setMeter(idPrefix, pct, resetText, isPurple = false) {
+function setQuotaMeter(idPrefix, pct, resetText) {
   const valEl = document.getElementById(`${idPrefix}-val`);
   const barEl = document.getElementById(`${idPrefix}-bar`);
   const resetEl = document.getElementById(`${idPrefix}-reset`);
@@ -143,163 +327,13 @@ function setMeter(idPrefix, pct, resetText, isPurple = false) {
   if (valEl) valEl.textContent = `${pct}%`;
   if (barEl) {
     barEl.style.width = `${pct}%`;
-    barEl.className = "meter-bar";
-    if (isPurple) {
-      barEl.classList.add("fill-purple");
-    } else {
-      if (pct > 40) barEl.classList.add("fill-green");
-      else if (pct > 15) barEl.classList.add("fill-yellow");
-      else barEl.classList.add("fill-red");
-    }
   }
   if (resetEl && resetText) {
     resetEl.textContent = `Resets: ${resetText}`;
   }
 }
 
-function renderTokens(task, limits) {
-  const sessionVal = document.getElementById("session-tokens-val");
-  const sessionBar = document.getElementById("session-tokens-bar");
-  const sessionSub = document.getElementById("session-tokens-sub");
-  const ctxVal = document.getElementById("context-tokens-val");
-  const ctxBar = document.getElementById("context-tokens-bar");
-
-  let estTokens = 0;
-  if (task && task.token_usage) {
-    estTokens = task.token_usage.total_tokens || task.token_usage.total || 0;
-  } else if (task && task.steps_count) {
-    estTokens = task.steps_count * 1250;
-  }
-
-  if (sessionVal) {
-    sessionVal.textContent = estTokens >= 1000 ? `${(estTokens / 1000).toFixed(1)}k` : `${estTokens}`;
-  }
-  if (sessionBar) {
-    const pct = Math.min(100, Math.round((estTokens / 200000) * 100));
-    sessionBar.style.width = `${pct}%`;
-  }
-  if (sessionSub) {
-    sessionSub.textContent = estTokens > 0 ? `~${estTokens.toLocaleString()} tokens in session` : "No session tokens yet";
-  }
-
-  if (ctxVal) {
-    const ctxLoad = Math.min(100, Math.round((estTokens / 1000000) * 100));
-    ctxVal.textContent = `${ctxLoad}%`;
-    if (ctxBar) ctxBar.style.width = `${ctxLoad}%`;
-  }
-}
-
-function formatResetTime(isoStr) {
-  if (!isoStr) return "--";
-  try {
-    const target = new Date(isoStr);
-    const now = new Date();
-    const diffMs = target - now;
-    if (diffMs <= 0) return "Ready";
-    const totalMinutes = Math.floor(diffMs / 60000);
-    const hours = Math.floor(totalMinutes / 60);
-    const mins = totalMinutes % 60;
-    if (hours >= 24) {
-      const days = Math.floor(hours / 24);
-      const remH = hours % 24;
-      return `${days}d ${remH}h`;
-    }
-    return `${hours}h ${mins}m`;
-  } catch (e) {
-    return isoStr;
-  }
-}
-
-// Render Active Task
-function renderTask(task) {
-  if (!task) return;
-  lastTaskData = task;
-
-  currentConvId = task.conversation_id;
-
-  // Header status & model
-  const statusChip = document.getElementById("agent-status-chip");
-  const statusText = document.getElementById("agent-status-text");
-  const statusTag = document.getElementById("task-status-tag");
-  const modelText = document.getElementById("active-model-name");
-
-  if (modelText && task.model) {
-    modelText.textContent = task.model;
-  }
-
-  const isRunning = task.active && (task.status === "CASCADE_RUN_STATUS_RUNNING" || task.not_fully_idle);
-  if (statusChip && statusText) {
-    statusChip.className = "status-chip " + (isRunning ? "running" : "idle");
-    if (isRunning) {
-      if (task.current_action && task.current_action.tool) {
-        statusText.textContent = `Tool: ${task.current_action.tool}`;
-      } else {
-        statusText.textContent = "Running";
-      }
-    } else {
-      statusText.textContent = "Idle";
-    }
-  }
-
-  if (statusTag) {
-    statusTag.className = "tag-status " + (isRunning ? "active" : "");
-    statusTag.textContent = isRunning ? "ACTIVE" : "IDLE";
-  }
-
-  // Conversation Info
-  const titleEl = document.getElementById("task-title");
-  if (titleEl) titleEl.textContent = task.title || "Antigravity Session";
-
-  const convIdShort = document.getElementById("conv-id-short");
-  if (convIdShort && currentConvId) {
-    convIdShort.textContent = `ID: ${currentConvId.slice(0, 8)}...`;
-  }
-
-  // Prominently displayed user prompt
-  // When task is not running or prompt is empty, ensure prompt text area is cleared or displays "No active session prompt" (clean state).
-  const promptEl = document.getElementById("task-prompt-content");
-  if (promptEl) {
-    const hasPrompt = Boolean(task.user_request && task.user_request.trim());
-    if (isRunning && hasPrompt) {
-      promptEl.textContent = task.user_request.trim();
-      promptEl.classList.remove("prompt-idle");
-    } else {
-      promptEl.textContent = "No active session prompt";
-      promptEl.classList.add("prompt-idle");
-    }
-  }
-
-  const stepsEl = document.getElementById("task-steps-count");
-  if (stepsEl) {
-    stepsEl.textContent = `Steps: ${task.steps_count || 0}`;
-  }
-
-  // Live Current Action
-  const actionToolBadge = document.getElementById("action-tool-badge");
-  const actionSummary = document.getElementById("action-summary-text");
-  const actionArgs = document.getElementById("action-args-preview");
-
-  if (task.current_action && task.current_action.tool) {
-    if (actionToolBadge) actionToolBadge.textContent = task.current_action.tool;
-    if (actionSummary) actionSummary.textContent = task.current_action.action || task.current_action.summary || "Executing";
-    if (actionArgs) actionArgs.textContent = JSON.stringify(task.current_action.args || {}, null, 2);
-  } else {
-    if (actionToolBadge) actionToolBadge.textContent = isRunning ? "AGENT" : "IDLE";
-    if (actionSummary) actionSummary.textContent = isRunning ? "Thinking / Planning..." : "Awaiting next user instruction";
-    if (actionArgs) actionArgs.textContent = "Ready for instructions.";
-  }
-
-  // Interactive Question Card
-  renderQuestion(task.pending_question);
-
-  // Timeline
-  renderTimeline(task.recent_steps);
-
-  // Token usage meters
-  renderTokens(task, lastLimitsData);
-}
-
-// Interactive Question Answering
+// 6. Interactive Question Answering
 function renderQuestion(q) {
   const card = document.getElementById("question-card");
   if (!card) return;
@@ -318,7 +352,7 @@ function renderQuestion(q) {
 
   const questionObj = q.questions[0];
   if (promptEl) {
-    promptEl.textContent = questionObj.question || "Antigravity needs your input to proceed:";
+    promptEl.textContent = questionObj.question || "Antigravity requires your input to proceed:";
   }
 
   if (optionsContainer) {
@@ -384,7 +418,7 @@ async function submitAnswer(e) {
       showToast("✓ Answer submitted to Antigravity!");
       const card = document.getElementById("question-card");
       if (card) card.style.display = "none";
-      setTimeout(fetchData, 1000);
+      setTimeout(fetchDashboardData, 1000);
     } else {
       showToast("Error: " + (data.error || "Failed to submit"));
     }
@@ -395,94 +429,7 @@ async function submitAnswer(e) {
   }
 }
 
-// Render Timeline
-function renderTimeline(steps) {
-  const container = document.getElementById("timeline-stream");
-  const countBadge = document.getElementById("timeline-count-badge");
-  if (!container) return;
-
-  if (!steps || steps.length === 0) {
-    container.innerHTML = `<div class="empty-state">No recorded steps yet.</div>`;
-    return;
-  }
-
-  if (countBadge) countBadge.textContent = `${steps.length} steps`;
-
-  let html = "";
-  const reversed = [...steps].reverse();
-
-  reversed.forEach(s => {
-    let icon = "⚡";
-    if (s.tool === "run_command") icon = "💻";
-    else if (s.tool === "replace_file_content" || s.tool === "write_to_file") icon = "📝";
-    else if (s.tool === "view_file") icon = "👁️";
-    else if (s.tool === "ask_question") icon = "❓";
-    else if (s.type === "USER_INPUT") icon = "👤";
-
-    const desc = s.action || s.summary || (s.tool ? s.tool : "Action");
-
-    html += `
-      <div class="timeline-item">
-        <span class="step-num font-mono">#${s.step_index !== undefined ? s.step_index : "-"}</span>
-        <span class="step-icon">${icon}</span>
-        <div class="step-desc">
-          ${s.tool ? `<span class="step-tool font-mono">${s.tool}:</span>` : ""}
-          <span>${escapeHtml(desc)}</span>
-        </div>
-      </div>
-    `;
-  });
-
-  container.innerHTML = html;
-}
-
-// Mobile Virtual Keypad Bar Setup & sendKey
-function setupMobileKeypad() {
-  const keypad = document.getElementById("mobile-keypad-bar");
-  if (!keypad) return;
-
-  const buttons = keypad.querySelectorAll(".vkey-btn");
-  buttons.forEach(btn => {
-    btn.addEventListener("click", (e) => {
-      e.preventDefault();
-      const keyName = btn.getAttribute("data-key");
-      if (keyName) {
-        sendKey(keyName);
-      }
-    });
-  });
-}
-
-async function sendKey(keyName) {
-  // Trigger haptic vibration
-  if (navigator.vibrate) {
-    try { navigator.vibrate(12); } catch (e) {}
-  }
-
-  // Visual active highlight
-  const btn = document.querySelector(`.vkey-btn[data-key="${keyName}"]`);
-  if (btn) {
-    btn.classList.add("active-press");
-    setTimeout(() => btn.classList.remove("active-press"), 150);
-  }
-
-  try {
-    const res = await fetch(`${BASE_PATH}/api/key`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ key: keyName })
-    });
-
-    if (!res.ok) {
-      const data = await res.json().catch(() => ({}));
-      showToast(data.error ? `Key error: ${data.error}` : `Failed to send ${keyName}`);
-    }
-  } catch (err) {
-    showToast(`Key send error: ${err.message || err}`);
-  }
-}
-
-// Terminal Reconnect Helper
+// 7. Terminal Reload
 function reloadTerminal() {
   const iframe = document.getElementById("terminal-iframe");
   if (iframe) {
@@ -491,12 +438,40 @@ function reloadTerminal() {
   }
 }
 
-// Utilities
+// 8. Utilities
 function copyConversationId() {
   if (!currentConvId) return;
   navigator.clipboard.writeText(currentConvId).then(() => {
-    showToast("Copied conversation ID");
+    showToast("Copied Session ID");
+  }).catch(() => {
+    showToast(currentConvId);
   });
+}
+
+function formatNumber(num) {
+  if (!num) return "0";
+  return Number(num).toLocaleString();
+}
+
+function formatResetTime(isoStr) {
+  if (!isoStr) return "--";
+  try {
+    const target = new Date(isoStr);
+    const now = new Date();
+    const diffMs = target - now;
+    if (diffMs <= 0) return "Ready";
+    const totalMinutes = Math.floor(diffMs / 60000);
+    const hours = Math.floor(totalMinutes / 60);
+    const mins = totalMinutes % 60;
+    if (hours >= 24) {
+      const days = Math.floor(hours / 24);
+      const remH = hours % 24;
+      return `${days}d ${remH}h`;
+    }
+    return `${hours}h ${mins}m`;
+  } catch (e) {
+    return isoStr;
+  }
 }
 
 function showToast(msg) {
@@ -507,14 +482,4 @@ function showToast(msg) {
   setTimeout(() => {
     toast.classList.remove("show");
   }, 2500);
-}
-
-function escapeHtml(str) {
-  if (!str) return "";
-  return String(str)
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&#039;");
 }

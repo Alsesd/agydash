@@ -42,6 +42,22 @@ TTYD_PORT = 17682
 TMUX_SESSION_NAME = "agy"
 
 
+def find_tmux():
+    tmux_bin = shutil.which("tmux")
+    if tmux_bin and os.path.exists(tmux_bin):
+        return tmux_bin
+    for candidate in [
+        "/run/current-system/sw/bin/tmux",
+        "/nix/store/kycygkx3pwxq004y26svfhw2p12yj4rb-tmux-3.7c/bin/tmux"
+    ]:
+        if os.path.exists(candidate) and os.access(candidate, os.X_OK):
+            return candidate
+    for p in Path("/nix/store").glob("*-tmux-*/bin/tmux"):
+        if p.is_file() and os.access(p, os.X_OK):
+            return str(p)
+    return "tmux"
+
+
 class TailscaleHelper:
     @staticmethod
     def get_info():
@@ -464,7 +480,13 @@ class AntigravityMonitor:
         if not conv_id:
             conv_id = self.get_active_conversation_id()
         if not conv_id:
-            return {"active": False, "message": "No active conversation found"}
+            return {
+                "active": False,
+                "workdir": "/home/alsesd/agydash",
+                "message": "No active conversation found"
+            }
+
+        workdir = "/home/alsesd/agydash"
 
         res = {
             "active": True,
@@ -472,6 +494,7 @@ class AntigravityMonitor:
             "title": "Current Task",
             "status": "IDLE",
             "model": "Gemini 3.8 Flash",
+            "workdir": workdir,
             "not_fully_idle": False,
             "user_request": "",
             "steps_count": 0,
@@ -494,7 +517,7 @@ class AntigravityMonitor:
                 conn = sqlite3.connect(f"file:{SUMMARIES_DB}?mode=ro", uri=True)
                 cursor = conn.cursor()
                 cursor.execute("""
-                    SELECT title, status, step_count, not_fully_idle
+                    SELECT title, status, step_count, not_fully_idle, workspace_uris
                     FROM conversation_summaries WHERE conversation_id = ?
                 """, (conv_id,))
                 row = cursor.fetchone()
@@ -503,6 +526,18 @@ class AntigravityMonitor:
                     res["status"] = row[1]
                     res["steps_count"] = row[2]
                     res["not_fully_idle"] = bool(row[3])
+                    if len(row) > 4 and row[4]:
+                        try:
+                            w_list = json.loads(row[4])
+                            if isinstance(w_list, list) and w_list:
+                                w_uri = w_list[0]
+                                if isinstance(w_uri, str):
+                                    if w_uri.startswith("file://"):
+                                        w_uri = w_uri[7:]
+                                    if w_uri:
+                                        workdir = w_uri
+                        except Exception:
+                            pass
                 conn.close()
             except Exception:
                 pass
@@ -536,7 +571,34 @@ class AntigravityMonitor:
                                     m_model = re.search(r"Model Selection` from None to ([^\n]+?)\.\s+[A-Z]", content)
                                     if m_model:
                                         res["model"] = m_model.group(1).strip()
+                                m_ws = re.search(r"workspace[s]?,\s*each defined by.*?\[URI\] -> \[CorpusName\]:\s*(\S+)", content)
+                                if m_ws:
+                                    ws_cand = m_ws.group(1).strip()
+                                    if ws_cand.startswith("file://"):
+                                        ws_cand = ws_cand[7:]
+                                    if ws_cand:
+                                        workdir = ws_cand
                                 break
+
+                        # Scan steps for Cwd or directory from tool calls
+                        for st in steps:
+                            for tc in st.get("tool_calls", []):
+                                args = tc.get("args", {})
+                                if not isinstance(args, dict):
+                                    continue
+                                cwd_val = args.get("Cwd")
+                                if cwd_val and isinstance(cwd_val, str):
+                                    c_cwd = cwd_val.strip("\"' ")
+                                    if c_cwd and c_cwd.startswith("/"):
+                                        workdir = c_cwd
+                                elif not workdir or workdir in ("/", "/home/alsesd"):
+                                    f_val = args.get("TargetFile") or args.get("AbsolutePath")
+                                    if f_val and isinstance(f_val, str):
+                                        c_f = f_val.strip("\"' ")
+                                        if c_f.startswith("/") and not c_f.startswith("/tmp") and not c_f.startswith("/home/alsesd/.gemini"):
+                                            parent = str(Path(c_f).parent)
+                                            if parent and parent != "/home/alsesd":
+                                                workdir = parent
 
                         # Scan for recent steps (compacted for fast mobile transfer)
                         compact_steps = []
@@ -612,6 +674,7 @@ class AntigravityMonitor:
         if (not res.get("not_fully_idle", False)) and res.get("status") != "CASCADE_RUN_STATUS_RUNNING":
             res["user_request"] = ""
 
+        res["workdir"] = workdir or "/home/alsesd/agydash"
         return res
 
 
@@ -631,16 +694,11 @@ class TerminalManager:
 
     def _run_loop(self):
         ttyd_bin = shutil.which("ttyd") or "/run/current-system/sw/bin/ttyd"
-        tmux_bin = shutil.which("tmux") or "/run/current-system/sw/bin/tmux"
-
         if not os.path.exists(ttyd_bin):
             for p in Path("/nix/store").glob("*-ttyd-*/bin/ttyd"):
                 ttyd_bin = str(p)
                 break
-        if not os.path.exists(tmux_bin):
-            for p in Path("/nix/store").glob("*-tmux-*/bin/tmux"):
-                tmux_bin = str(p)
-                break
+        tmux_bin = find_tmux()
 
         try:
             subprocess.run([tmux_bin, "new-session", "-d", "-s", self.session], check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
@@ -682,82 +740,82 @@ class DashboardHandler(BaseHTTPRequestHandler):
 
     def _normalize_path(self):
         url_path = self.path.split("?")[0]
-        if url_path in ("/agydash", "/agydash/"):
+        clean = re.sub(r"/+", "/", url_path)
+        if clean in ("/agydash", "/agydash/"):
             return "/"
-        if url_path.startswith("/agydash/"):
-            return url_path[len("/agydash"):]
-        return url_path
+        if clean.startswith("/agydash/"):
+            return clean[len("/agydash"):]
+        return clean
 
     def do_HEAD(self):
         url_path = self._normalize_path()
-        if url_path in ("/", "/index.html"):
+        clean_path = url_path.rstrip("/") if url_path != "/" else "/"
+        if clean_path in ("/", "/index.html"):
             self.send_response(200)
             self.send_header("Content-Type", "text/html; charset=utf-8")
-            self.send_header("Cache-Control", "no-cache")
-            self.end_headers()
-        elif url_path.endswith(".webmanifest"):
+        elif clean_path.endswith(".webmanifest"):
             self.send_response(200)
             self.send_header("Content-Type", "application/manifest+json; charset=utf-8")
-            self.send_header("Cache-Control", "no-cache")
-            self.end_headers()
-        elif url_path.endswith(".js"):
+        elif clean_path.endswith(".js"):
             self.send_response(200)
             self.send_header("Content-Type", "application/javascript; charset=utf-8")
-            self.send_header("Cache-Control", "no-cache")
-            self.end_headers()
-        elif url_path.endswith(".svg"):
+        elif clean_path.endswith(".css"):
+            self.send_response(200)
+            self.send_header("Content-Type", "text/css; charset=utf-8")
+        elif clean_path.endswith(".svg"):
             self.send_response(200)
             self.send_header("Content-Type", "image/svg+xml")
-            self.send_header("Cache-Control", "no-cache")
-            self.end_headers()
-        elif url_path.endswith(".png"):
+        elif clean_path.endswith(".png"):
             self.send_response(200)
             self.send_header("Content-Type", "image/png")
-            self.send_header("Cache-Control", "no-cache")
-            self.end_headers()
-        elif url_path.startswith("/api/"):
+        elif clean_path.startswith("/api/"):
             self.send_response(200)
             self.send_header("Content-Type", "application/json; charset=utf-8")
-            self.send_header("Cache-Control", "no-cache")
-            self.end_headers()
         else:
             self.send_response(200)
-            self.end_headers()
+
+        self.send_header("Cache-Control", "no-cache, no-store, must-revalidate, max-age=0")
+        self.send_header("Pragma", "no-cache")
+        self.send_header("Expires", "0")
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.end_headers()
 
     def do_GET(self):
         url_path = self._normalize_path()
+        clean_path = url_path.rstrip("/") if url_path != "/" else "/"
 
-        if url_path in ("/", "/index.html"):
+        if clean_path in ("/", "/index.html"):
             self._serve_static_file("index.html", "text/html; charset=utf-8")
-        elif url_path in ("/manifest.webmanifest", "/static/manifest.webmanifest"):
+        elif clean_path in ("/manifest.webmanifest", "/static/manifest.webmanifest"):
             self._serve_static_file("manifest.webmanifest", "application/manifest+json; charset=utf-8")
-        elif url_path in ("/sw.js", "/static/sw.js"):
+        elif clean_path in ("/sw.js", "/static/sw.js"):
             self._serve_static_file("sw.js", "application/javascript; charset=utf-8")
-        elif url_path in ("/favicon.svg", "/icon.svg"):
-            self._serve_static_file("favicon.svg" if "favicon" in url_path else "icon.svg", "image/svg+xml")
-        elif url_path.startswith("/static/"):
-            rel = url_path[len("/static/"):]
+        elif clean_path in ("/favicon.svg", "/icon.svg", "/static/favicon.svg", "/static/icon.svg"):
+            self._serve_static_file("favicon.svg" if "favicon" in clean_path else "icon.svg", "image/svg+xml")
+        elif clean_path.startswith("/static/"):
+            rel = clean_path[len("/static/"):]
             self._serve_static_file(rel)
-        elif (STATIC_DIR / url_path.lstrip("/")).is_file():
-            self._serve_static_file(url_path.lstrip("/"))
-        elif url_path == "/api/status":
+        elif (STATIC_DIR / clean_path.lstrip("/")).is_file():
+            self._serve_static_file(clean_path.lstrip("/"))
+        elif clean_path == "/api/status":
             self._send_json(self.monitor.get_task_details())
-        elif url_path == "/api/limits":
+        elif clean_path == "/api/limits":
             self._send_json(self.monitor.get_limits_and_usage())
-        elif url_path == "/api/conversations":
+        elif clean_path == "/api/conversations":
             self._send_json(self.monitor.get_recent_conversations(15))
-        elif url_path == "/api/tailscale":
+        elif clean_path == "/api/tailscale":
             self._send_json(TailscaleHelper.get_info())
-        elif url_path == "/api/stream":
+        elif clean_path == "/api/stream":
             self._handle_sse_stream()
-        elif url_path.startswith("/terminal"):
+        elif clean_path.startswith("/terminal"):
             self._proxy_to_ttyd()
         else:
             self.send_error(404, "Not Found")
 
     def do_POST(self):
         url_path = self._normalize_path()
-        if url_path in ("/api/key", "/agydash/api/key"):
+        clean_path = url_path.rstrip("/") if url_path != "/" else "/"
+        if clean_path in ("/api/key", "/agydash/api/key"):
             content_length = int(self.headers.get("Content-Length", 0))
             body = self.rfile.read(content_length)
             try:
@@ -768,9 +826,13 @@ class DashboardHandler(BaseHTTPRequestHandler):
                     return
 
                 key_map = {
+                    "Ctrl+Tab": "C-Tab",
+                    "CtrlTab": "C-Tab",
+                    "C-Tab": "C-Tab",
                     "Shift+Tab": "BTab",
                     "ShiftTab": "BTab",
                     "BTab": "BTab",
+                    "Tab": "Tab",
                     "Esc": "Escape",
                     "Escape": "Escape",
                     "Up": "Up",
@@ -778,34 +840,26 @@ class DashboardHandler(BaseHTTPRequestHandler):
                     "Left": "Left",
                     "Right": "Right",
                     "Enter": "Enter",
+                    "Return": "Enter",
+                    "Space": "Space",
+                    "Ctrl+C": "C-c",
                     "CtrlC": "C-c",
                     "Ctrl-C": "C-c",
-                    "Space": "Space",
+                    "C-c": "C-c",
                 }
-                mapped_key = key_map.get(key, key)
+                lookup_map = {k.lower(): v for k, v in key_map.items()}
+                mapped_key = key_map.get(key, lookup_map.get(key.lower(), key))
 
-                # Locate tmux binary
-                tmux_candidates = [
-                    "/nix/store/kycygkx3pwxq004y26svfhw2p12yj4rb-tmux-3.7c/bin/tmux",
-                    "/run/current-system/sw/bin/tmux",
-                ]
-                tmux_bin = None
-                for candidate in tmux_candidates:
-                    if os.path.exists(candidate):
-                        tmux_bin = candidate
-                        break
-                if not tmux_bin:
-                    tmux_bin = shutil.which("tmux")
-                if not tmux_bin:
-                    for p in Path("/nix/store").glob("*-tmux-*/bin/tmux"):
-                        if p.is_file() and os.access(p, os.X_OK):
-                            tmux_bin = str(p)
-                            break
-                if not tmux_bin:
-                    tmux_bin = "tmux"
+                tmux_bin = find_tmux()
+                # Ensure agy session exists
+                subprocess.run(
+                    [tmux_bin, "new-session", "-d", "-s", TMUX_SESSION_NAME],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL
+                )
 
                 res = subprocess.run(
-                    [tmux_bin, "send-keys", "-t", "agy", mapped_key],
+                    [tmux_bin, "send-keys", "-t", TMUX_SESSION_NAME, mapped_key],
                     stdout=subprocess.PIPE,
                     stderr=subprocess.PIPE,
                     text=True,
@@ -823,7 +877,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
             except Exception as e:
                 self._send_json({"success": False, "error": str(e)}, status=500)
 
-        elif url_path in ("/api/answer", "/agydash/api/answer"):
+        elif clean_path in ("/api/answer", "/agydash/api/answer"):
             content_length = int(self.headers.get("Content-Length", 0))
             body = self.rfile.read(content_length)
             try:
@@ -858,7 +912,9 @@ class DashboardHandler(BaseHTTPRequestHandler):
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Content-Length", str(len(payload)))
         self.send_header("Access-Control-Allow-Origin", "*")
-        self.send_header("Cache-Control", "no-cache, no-store, must-revalidate")
+        self.send_header("Cache-Control", "no-cache, no-store, must-revalidate, max-age=0")
+        self.send_header("Pragma", "no-cache")
+        self.send_header("Expires", "0")
         self.end_headers()
         self.wfile.write(payload)
 
@@ -888,7 +944,9 @@ class DashboardHandler(BaseHTTPRequestHandler):
             self.send_response(200)
             self.send_header("Content-Type", content_type)
             self.send_header("Content-Length", str(len(content)))
-            self.send_header("Cache-Control", "public, max-age=60")
+            self.send_header("Cache-Control", "no-cache, no-store, must-revalidate, max-age=0")
+            self.send_header("Pragma", "no-cache")
+            self.send_header("Expires", "0")
             self.send_header("Access-Control-Allow-Origin", "*")
             self.end_headers()
             self.wfile.write(content)

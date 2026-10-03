@@ -9,20 +9,21 @@
   <meta name="theme-color" content="#1d2021">
   <title>Antigravity Hub</title>
   <link rel="manifest" href="/agydash/manifest.webmanifest">
+  <link rel="stylesheet" href="/agydash/static/style.css">
   <link rel="apple-touch-icon" href="/agydash/static/icon-192.png">
   <link rel="icon" type="image/svg+xml" href="/agydash/static/icon.svg">
-  <link rel="stylesheet" href="/agydash/static/style.css">
 </head>
 <body class="gruvbox-dark">
   <div class="page-container">
-    <!-- Top Bar -->
+    
+    <!-- a. Top bar with branding, active model name, and connection status chip -->
     <header class="top-bar">
       <div class="bar-left">
         <div class="brand">
           <svg viewBox="0 0 24 24" width="22" height="22" stroke="currentColor" stroke-width="2.2" fill="none">
             <path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/>
           </svg>
-          <span class="brand-name">Antigravity</span>
+          <span class="brand-name">Antigravity Hub</span>
         </div>
         <div class="status-chip" id="agent-status-chip">
           <span class="pulse-dot"></span>
@@ -34,8 +35,7 @@
         <div class="model-badge" id="model-badge" title="Active Model">
           <span id="active-model-name">Gemini 3.8 Flash</span>
         </div>
-
-        <button class="btn-icon" id="btn-refresh" title="Refresh">
+        <button class="btn-icon" id="btn-refresh" title="Refresh Dashboard" aria-label="Refresh Dashboard">
           <svg viewBox="0 0 24 24" width="16" height="16" stroke="currentColor" stroke-width="2" fill="none">
             <path d="M23 4v6h-6"></path>
             <path d="M1 20v-6h6"></path>
@@ -45,10 +45,214 @@
       </div>
     </header>
 
-    <!-- Main Single Page Content -->
     <main class="dashboard-body">
 
-      <!-- Interactive Question Alert (Displayed prominently if agent asks a question) -->
+      <!-- b. #workdir-widget: Displaying active working directory, session ID, and status badge -->
+      <section class="card widget-card" id="workdir-widget">
+        <div class="workdir-header">
+          <div class="workdir-info">
+            <div class="workdir-title-row">
+              <span class="badge" id="session-status-badge">IDLE</span>
+              <span class="workdir-session-title font-bold" id="task-title">Antigravity Session</span>
+            </div>
+            <div class="workdir-path-row font-mono" title="Active Working Directory">
+              <span class="workdir-icon">📁</span>
+              <span class="workdir-path" id="workdir-path">/home/alsesd</span>
+            </div>
+          </div>
+          <div class="session-meta">
+            <div class="chip-copy font-mono" id="copy-conv-btn" onclick="copyConversationId()" title="Copy Session ID">
+              <span id="conv-id-short">ID: --------</span>
+              <svg viewBox="0 0 24 24" width="12" height="12" stroke="currentColor" stroke-width="2" fill="none">
+                <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+                <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+              </svg>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- c. #terminal-controls: Virtual control keypad placed ABOVE the CLI terminal -->
+      <section class="card controls-card" id="terminal-controls" aria-label="Terminal Keypad Controls">
+        <div class="controls-toolbar">
+          <span class="controls-title">Keypad</span>
+          <span class="controls-hint">Touch controls for CLI terminal</span>
+        </div>
+        <div class="keypad-grid">
+          <button type="button" class="vkey-btn vkey-special" data-key="Esc" title="Escape (Esc)">Esc</button>
+          <button type="button" class="vkey-btn vkey-special" data-key="Ctrl+Tab" title="Ctrl+Tab">Ctrl+Tab</button>
+          <button type="button" class="vkey-btn vkey-special" data-key="Tab" title="Tab">Tab</button>
+          <button type="button" class="vkey-btn vkey-danger" data-key="Ctrl+C" title="Interrupt (Ctrl+C)">Ctrl+C</button>
+          <button type="button" class="vkey-btn vkey-nav" data-key="Up" title="Up Arrow">&uarr; Up</button>
+          <button type="button" class="vkey-btn vkey-nav" data-key="Down" title="Down Arrow">&darr; Down</button>
+          <button type="button" class="vkey-btn vkey-nav" data-key="Left" title="Left Arrow">&larr; Left</button>
+          <button type="button" class="vkey-btn vkey-nav" data-key="Right" title="Right Arrow">&rarr; Right</button>
+          <button type="button" class="vkey-btn vkey-action" data-key="Enter" title="Enter / Return">&crarr; Enter</button>
+        </div>
+      </section>
+
+      <!-- d. #cli-terminal-section: Embedded CLI terminal section -->
+      <section class="card terminal-section" id="cli-terminal-section">
+        <div class="terminal-section-header">
+          <div class="terminal-title-group">
+            <span class="terminal-dot"></span>
+            <span class="terminal-title font-bold">CLI Terminal</span>
+            <span class="terminal-tag font-mono">tmux: agy</span>
+          </div>
+          <div class="terminal-actions">
+            <button type="button" class="btn-terminal-action" id="btn-terminal-reload" onclick="reloadTerminal()" title="Reload Terminal Stream">
+              <svg viewBox="0 0 24 24" width="13" height="13" stroke="currentColor" stroke-width="2" fill="none">
+                <path d="M23 4v6h-6"></path>
+                <path d="M1 20v-6h6"></path>
+                <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path>
+              </svg>
+              <span>Reload Terminal</span>
+            </button>
+          </div>
+        </div>
+        <div class="terminal-iframe-container" id="session-terminal-container">
+          <iframe id="terminal-iframe" src="/agydash/terminal/" frameborder="0" allowfullscreen title="Antigravity Terminal"></iframe>
+        </div>
+      </section>
+
+      <!-- e. #token-usage-widget: Token usage metrics and model limits placed BELOW the CLI terminal -->
+      <section class="card token-section" id="token-usage-widget">
+        <div class="section-header">
+          <div class="title-with-icon">
+            <span class="icon-stat">📊</span>
+            <h2 class="section-title">Token Usage & Model Limits</h2>
+          </div>
+          <span class="status-indicator font-mono" id="quota-sync-status">Syncing...</span>
+        </div>
+
+        <!-- Active session tokens -->
+        <div class="tokens-summary-grid">
+          <div class="token-metric-card">
+            <span class="token-label">Input Tokens</span>
+            <span class="token-value font-mono" id="tokens-input">0</span>
+            <span class="token-sub">Session Prompt</span>
+          </div>
+          <div class="token-metric-card">
+            <span class="token-label">Output Tokens</span>
+            <span class="token-value font-mono" id="tokens-output">0</span>
+            <span class="token-sub">Model Generation</span>
+          </div>
+          <div class="token-metric-card highlight">
+            <span class="token-label">Total Tokens</span>
+            <span class="token-value font-mono" id="tokens-total">0</span>
+            <span class="token-sub">Cumulative</span>
+          </div>
+          <div class="token-metric-card">
+            <span class="token-label">Step Count</span>
+            <span class="token-value font-mono" id="tokens-steps">0</span>
+            <span class="token-sub">Agent Steps</span>
+          </div>
+        </div>
+
+        <!-- Quota & limits meters: Gemini 3.8 Flash, Claude 3.5 Sonnet, GPT-4o -->
+        <div class="quota-meters-grid">
+          <!-- Gemini 3.8 Flash -->
+          <div class="quota-meter-card" id="meter-gemini">
+            <div class="meter-card-header">
+              <div class="meter-card-title">
+                <span class="dot-gemini"></span>
+                <span class="font-bold">Gemini 3.8 Flash</span>
+              </div>
+              <span class="badge badge-green">Primary</span>
+            </div>
+            <div class="meter-bars">
+              <div class="meter-bar-block">
+                <div class="meter-labels">
+                  <span class="meter-name">Weekly Quota</span>
+                  <span class="meter-pct font-mono" id="gemini-weekly-val">--%</span>
+                </div>
+                <div class="meter-track">
+                  <div class="meter-bar fill-green" id="gemini-weekly-bar" style="width: 0%;"></div>
+                </div>
+                <span class="meter-timer" id="gemini-weekly-reset">Resets: --</span>
+              </div>
+              <div class="meter-bar-block mt-2">
+                <div class="meter-labels">
+                  <span class="meter-name">5-Hour Quota</span>
+                  <span class="meter-pct font-mono" id="gemini-5h-val">--%</span>
+                </div>
+                <div class="meter-track">
+                  <div class="meter-bar fill-green" id="gemini-5h-bar" style="width: 0%;"></div>
+                </div>
+                <span class="meter-timer" id="gemini-5h-reset">Resets: --</span>
+              </div>
+            </div>
+          </div>
+
+          <!-- Claude 3.5 Sonnet -->
+          <div class="quota-meter-card" id="meter-claude">
+            <div class="meter-card-header">
+              <div class="meter-card-title">
+                <span class="dot-claude"></span>
+                <span class="font-bold">Claude 3.5 Sonnet</span>
+              </div>
+              <span class="badge badge-purple">3rd Party</span>
+            </div>
+            <div class="meter-bars">
+              <div class="meter-bar-block">
+                <div class="meter-labels">
+                  <span class="meter-name">Weekly Quota</span>
+                  <span class="meter-pct font-mono" id="claude-weekly-val">--%</span>
+                </div>
+                <div class="meter-track">
+                  <div class="meter-bar fill-purple" id="claude-weekly-bar" style="width: 0%;"></div>
+                </div>
+                <span class="meter-timer" id="claude-weekly-reset">Resets: --</span>
+              </div>
+              <div class="meter-bar-block mt-2">
+                <div class="meter-labels">
+                  <span class="meter-name">5-Hour Quota</span>
+                  <span class="meter-pct font-mono" id="claude-5h-val">--%</span>
+                </div>
+                <div class="meter-track">
+                  <div class="meter-bar fill-purple" id="claude-5h-bar" style="width: 0%;"></div>
+                </div>
+                <span class="meter-timer" id="claude-5h-reset">Resets: --</span>
+              </div>
+            </div>
+          </div>
+
+          <!-- GPT-4o -->
+          <div class="quota-meter-card" id="meter-gpt">
+            <div class="meter-card-header">
+              <div class="meter-card-title">
+                <span class="dot-gpt"></span>
+                <span class="font-bold">GPT-4o</span>
+              </div>
+              <span class="badge badge-aqua">3rd Party</span>
+            </div>
+            <div class="meter-bars">
+              <div class="meter-bar-block">
+                <div class="meter-labels">
+                  <span class="meter-name">Weekly Quota</span>
+                  <span class="meter-pct font-mono" id="gpt-weekly-val">--%</span>
+                </div>
+                <div class="meter-track">
+                  <div class="meter-bar fill-aqua" id="gpt-weekly-bar" style="width: 0%;"></div>
+                </div>
+                <span class="meter-timer" id="gpt-weekly-reset">Resets: --</span>
+              </div>
+              <div class="meter-bar-block mt-2">
+                <div class="meter-labels">
+                  <span class="meter-name">5-Hour Quota</span>
+                  <span class="meter-pct font-mono" id="gpt-5h-val">--%</span>
+                </div>
+                <div class="meter-track">
+                  <div class="meter-bar fill-aqua" id="gpt-5h-bar" style="width: 0%;"></div>
+                </div>
+                <span class="meter-timer" id="gpt-5h-reset">Resets: --</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- f. Pending interactive question card (#question-card) for ask_question responses -->
       <section class="card question-card" id="question-card" style="display: none;">
         <div class="card-header question-header">
           <div class="title-with-icon">
@@ -72,199 +276,25 @@
         </div>
       </section>
 
-      <!-- Section: Current Prompt & Active Task -->
-      <section class="section-block">
-        <div class="section-header">
-          <h2 class="section-title">Current Prompt & Task</h2>
-          <div class="task-meta font-mono" id="task-steps-count">Steps: --</div>
+      <!-- Active Prompt & Live Action (Helpful Session Details) -->
+      <section class="card session-detail-card" id="session-detail-section">
+        <div class="detail-header">
+          <span class="detail-title font-bold">Current Prompt & Live Action</span>
+          <span class="task-steps-meta font-mono" id="task-steps-count">Steps: --</span>
         </div>
-
-        <div class="card">
-          <div class="card-header">
-            <div class="session-info">
-              <span class="tag-status" id="task-status-tag">IDLE</span>
-              <span class="task-title font-bold" id="task-title">Antigravity Session</span>
-            </div>
-            <div class="chip-copy font-mono" id="copy-conv-btn" onclick="copyConversationId()" title="Copy Conversation ID">
-              <span id="conv-id-short">ID: --------</span>
-              <svg viewBox="0 0 24 24" width="12" height="12" stroke="currentColor" stroke-width="2" fill="none">
-                <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
-                <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
-              </svg>
-            </div>
+        <div class="task-prompt-box">
+          <div class="prompt-header">
+            <span class="label-xs text-muted">Current Prompt:</span>
           </div>
-
-          <!-- Prominently displayed user prompt -->
-          <div class="task-prompt-box">
-            <div class="prompt-header">
-              <span class="label-xs text-muted">Current Prompt:</span>
-            </div>
-            <div class="prompt-text font-mono" id="task-prompt-content">No active session prompt</div>
-          </div>
-
-          <!-- Live Action Box -->
-          <div class="current-action-box" id="current-action-box">
-            <div class="action-top">
-              <span class="action-pulse"></span>
-              <span class="font-bold text-aqua" id="action-tool-badge">AGENT</span>
-              <span class="action-name" id="action-summary-text">Ready for instructions</span>
-            </div>
-            <pre class="action-args font-mono" id="action-args-preview">{}</pre>
-          </div>
+          <div class="prompt-text font-mono" id="task-prompt-content">No active session prompt</div>
         </div>
-      </section>
-
-      <!-- Section: Model Limits & Quota Pools -->
-      <section class="section-block">
-        <div class="section-header">
-          <h2 class="section-title">Token Usage & Limit Pools</h2>
-          <span class="status-indicator" id="quota-sync-status">Syncing...</span>
-        </div>
-
-        <div class="quota-grid">
-          <!-- Gemini Card -->
-          <div class="card quota-card">
-            <div class="card-header">
-              <div class="title-with-icon">
-                <span class="dot-gemini"></span>
-                <span class="card-title font-bold">Gemini Models</span>
-              </div>
-              <span class="badge" id="gemini-pill">Flash / Pro</span>
-            </div>
-            <div class="meter-group">
-              <div class="meter-item">
-                <div class="meter-labels">
-                  <span class="meter-name">Weekly Limit</span>
-                  <span class="meter-val font-mono" id="gemini-weekly-val">--%</span>
-                </div>
-                <div class="meter-track">
-                  <div class="meter-bar fill-green" id="gemini-weekly-bar" style="width: 0%;"></div>
-                </div>
-                <span class="meter-sub" id="gemini-weekly-reset">Resets in: --</span>
-              </div>
-
-              <div class="meter-item mt-2">
-                <div class="meter-labels">
-                  <span class="meter-name">5-Hour Limit</span>
-                  <span class="meter-val font-mono" id="gemini-5h-val">--%</span>
-                </div>
-                <div class="meter-track">
-                  <div class="meter-bar fill-green" id="gemini-5h-bar" style="width: 0%;"></div>
-                </div>
-                <span class="meter-sub" id="gemini-5h-reset">Resets in: --</span>
-              </div>
-            </div>
+        <div class="current-action-box" id="current-action-box">
+          <div class="action-top">
+            <span class="action-pulse"></span>
+            <span class="font-bold text-aqua" id="action-tool-badge">AGENT</span>
+            <span class="action-name" id="action-summary-text">Ready for instructions</span>
           </div>
-
-          <!-- Claude & GPT Card -->
-          <div class="card quota-card">
-            <div class="card-header">
-              <div class="title-with-icon">
-                <span class="dot-3p"></span>
-                <span class="card-title font-bold">Claude & GPT Models</span>
-              </div>
-              <span class="badge badge-purple">3rd Party</span>
-            </div>
-            <div class="meter-group">
-              <div class="meter-item">
-                <div class="meter-labels">
-                  <span class="meter-name">Weekly Limit</span>
-                  <span class="meter-val font-mono" id="3p-weekly-val">--%</span>
-                </div>
-                <div class="meter-track">
-                  <div class="meter-bar fill-purple" id="3p-weekly-bar" style="width: 0%;"></div>
-                </div>
-                <span class="meter-sub" id="3p-weekly-reset">Resets in: --</span>
-              </div>
-
-              <div class="meter-item mt-2">
-                <div class="meter-labels">
-                  <span class="meter-name">5-Hour Limit</span>
-                  <span class="meter-val font-mono" id="3p-5h-val">--%</span>
-                </div>
-                <div class="meter-track">
-                  <div class="meter-bar fill-purple" id="3p-5h-bar" style="width: 0%;"></div>
-                </div>
-                <span class="meter-sub" id="3p-5h-reset">Resets in: --</span>
-              </div>
-            </div>
-          </div>
-
-          <!-- Estimated Tokens Card -->
-          <div class="card quota-card">
-            <div class="card-header">
-              <div class="title-with-icon">
-                <span class="dot-tokens"></span>
-                <span class="card-title font-bold">Session Tokens</span>
-              </div>
-              <span class="badge badge-orange">Usage</span>
-            </div>
-            <div class="meter-group">
-              <div class="meter-item">
-                <div class="meter-labels">
-                  <span class="meter-name">Estimated Tokens</span>
-                  <span class="meter-val font-mono" id="session-tokens-val">0</span>
-                </div>
-                <div class="meter-track">
-                  <div class="meter-bar fill-orange" id="session-tokens-bar" style="width: 0%;"></div>
-                </div>
-                <span class="meter-sub" id="session-tokens-sub">Cumulative tokens in session</span>
-              </div>
-
-              <div class="meter-item mt-2">
-                <div class="meter-labels">
-                  <span class="meter-name">Context Load</span>
-                  <span class="meter-val font-mono" id="context-tokens-val">--</span>
-                </div>
-                <div class="meter-track">
-                  <div class="meter-bar fill-aqua" id="context-tokens-bar" style="width: 0%;"></div>
-                </div>
-                <span class="meter-sub" id="context-tokens-sub">Window capacity</span>
-              </div>
-            </div>
-          </div>
-        </div>
-      </section>
-
-      <!-- Section: Active Antigravity Session Terminal Interface -->
-      <section class="section-block">
-        <div class="section-header">
-          <h2 class="section-title">Active Antigravity Session</h2>
-          <div class="terminal-header-actions">
-            <button class="btn-icon-sm" onclick="reloadTerminal()" title="Reconnect Session">↻ Reconnect</button>
-          </div>
-        </div>
-
-        <div class="card terminal-card">
-          <!-- Mobile Virtual Keypad Bar -->
-          <div class="mobile-keypad-bar" id="mobile-keypad-bar" aria-label="Mobile Keypad Controls">
-            <button class="vkey-btn" id="key-shift-tab" data-key="Shift+Tab" title="Shift+Tab">Shift+Tab</button>
-            <button class="vkey-btn" id="key-esc" data-key="Esc" title="Escape">Esc</button>
-            <button class="vkey-btn" id="key-up" data-key="Up" title="Up Arrow">&uarr;</button>
-            <button class="vkey-btn" id="key-down" data-key="Down" title="Down Arrow">&darr;</button>
-            <button class="vkey-btn" id="key-left" data-key="Left" title="Left Arrow">&larr;</button>
-            <button class="vkey-btn" id="key-right" data-key="Right" title="Right Arrow">&rarr;</button>
-            <button class="vkey-btn vkey-accent" id="key-enter" data-key="Enter" title="Enter">Enter</button>
-            <button class="vkey-btn vkey-danger" id="key-ctrl-c" data-key="Ctrl-C" title="Ctrl+C">Ctrl-C</button>
-          </div>
-
-          <div class="session-terminal-container" id="session-terminal-container">
-            <iframe id="terminal-iframe" src="/agydash/terminal/" frameborder="0" allowfullscreen></iframe>
-          </div>
-        </div>
-      </section>
-
-      <!-- Section: Recent Activity Timeline -->
-      <section class="section-block">
-        <div class="section-header">
-          <h2 class="section-title">Recent Activity</h2>
-          <span class="text-xs text-muted" id="timeline-count-badge">Last 25 steps</span>
-        </div>
-
-        <div class="card">
-          <div class="timeline" id="timeline-stream">
-            <div class="empty-state">Loading activity timeline...</div>
-          </div>
+          <pre class="action-args font-mono" id="action-args-preview">{}</pre>
         </div>
       </section>
 

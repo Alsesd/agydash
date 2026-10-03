@@ -1,6 +1,6 @@
 {
-  "name": "Antigravity Dashboard",
-  "short_name": "AgyDash",
+  "name": "Antigravity Hub",
+  "short_name": "Antigravity",
   "id": "/agydash/",
   "start_url": "/agydash/",
   "scope": "/agydash/",
